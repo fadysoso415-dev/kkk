@@ -1,0 +1,6 @@
+{
+  "name": "منيو كليك",
+  "description": "منصة SaaS متكاملة للمنيو الإلكتروني الذكي وتوليد أكواد الـ QR للمطاعم والكافيهات مع الطلب المباشر عبر واتساب والتحديثات اللحظية.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

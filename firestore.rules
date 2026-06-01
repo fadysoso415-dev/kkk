@@ -1,0 +1,120 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Default-deny catch-all safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -- global helpers --
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // checks if current user owns the restaurant
+    function isOwnerOfRestaurant(restaurantId) {
+      return isSignedIn() &&
+        get(/databases/$(database)/documents/restaurants/$(restaurantId)).data.ownerUid == request.auth.uid;
+    }
+
+    // validating incoming data structure
+    function isValidRestaurant(data) {
+      return data.ownerUid is string &&
+             data.ownerUid.size() <= 128 &&
+             data.slug is string &&
+             data.slug.size() <= 100 &&
+             data.name is string &&
+             data.name.size() <= 100 &&
+             data.phoneNumber is string &&
+             data.phoneNumber.size() <= 30 &&
+             data.currency is string &&
+             data.currency.size() <= 10 &&
+             data.subscriptionType is string &&
+             (data.subscriptionType == 'free' || data.subscriptionType == 'premium' || data.subscriptionType == 'enterprise');
+    }
+
+    function isValidCategory(data) {
+      return data.name is string &&
+             data.name.size() <= 100 &&
+             data.order is int &&
+             data.isActive is bool;
+    }
+
+    function isValidProduct(data) {
+      return data.name is string &&
+             data.name.size() <= 150 &&
+             data.price is number &&
+             data.categoryId is string &&
+             data.categoryId.size() <= 128 &&
+             data.isAvailable is bool &&
+             data.order is int;
+    }
+
+    // -- paths and operations --
+    match /restaurants/{restaurantId} {
+      // Anyone can read restaurant info (critical for client QR scanning)
+      allow read: if true;
+
+      // Create: must be logged in, ID must be valid, owner fields must match, check attributes
+      allow create: if isSignedIn() &&
+                      isValidId(restaurantId) &&
+                      incoming().ownerUid == request.auth.uid &&
+                      isValidRestaurant(incoming());
+
+      // Update: only the restaurant owner can modify details
+      allow update: if isSignedIn() &&
+                      existing().ownerUid == request.auth.uid &&
+                      incoming().ownerUid == request.auth.uid &&
+                      isValidRestaurant(incoming());
+
+      // Delete: only owner can delete their restaurant
+      allow delete: if isSignedIn() &&
+                      existing().ownerUid == request.auth.uid;
+
+      // categories nested sub-collection
+      match /categories/{categoryId} {
+        // Anyone can view categories
+        allow read: if true;
+
+        // Writing restricted to owner
+        allow create: if isOwnerOfRestaurant(restaurantId) &&
+                        isValidId(categoryId) &&
+                        isValidCategory(incoming());
+
+        allow update: if isOwnerOfRestaurant(restaurantId) &&
+                        isValidCategory(incoming());
+
+        allow delete: if isOwnerOfRestaurant(restaurantId);
+      }
+
+      // products nested sub-collection
+      match /products/{productId} {
+        // Anyone can view products
+        allow read: if true;
+
+        // Writing restricted to owner
+        allow create: if isOwnerOfRestaurant(restaurantId) &&
+                        isValidId(productId) &&
+                        isValidProduct(incoming());
+
+        allow update: if isOwnerOfRestaurant(restaurantId) &&
+                        isValidProduct(incoming());
+
+        allow delete: if isOwnerOfRestaurant(restaurantId);
+      }
+    }
+  }
+}
