@@ -26,8 +26,12 @@ service cloud.firestore {
 
     // checks if current user owns the restaurant
     function isOwnerOfRestaurant(restaurantId) {
-      return isSignedIn() &&
-        get(/databases/$(database)/documents/restaurants/$(restaurantId)).data.ownerUid == request.auth.uid;
+      return isSignedIn() && (
+        (restaurantId.startsWith('rest-') && 
+         restaurantId.split('rest-').size() > 1 && 
+         request.auth.uid.startsWith(restaurantId.split('rest-')[1])) ||
+        get(/databases/$(database)/documents/restaurants/$(restaurantId)).data.ownerUid == request.auth.uid
+      );
     }
 
     // validating incoming data structure
@@ -74,11 +78,12 @@ service cloud.firestore {
                       incoming().ownerUid == request.auth.uid &&
                       isValidRestaurant(incoming());
 
-      // Update: only the restaurant owner can modify details
-      allow update: if isSignedIn() &&
+      // Update: only the restaurant owner can modify details, or anyone can increment viewsCount/whatsappOrdersCount
+      allow update: if (isSignedIn() &&
                       existing().ownerUid == request.auth.uid &&
                       incoming().ownerUid == request.auth.uid &&
-                      isValidRestaurant(incoming());
+                      isValidRestaurant(incoming())) ||
+                      (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['viewsCount', 'whatsappOrdersCount']));
 
       // Delete: only owner can delete their restaurant
       allow delete: if isSignedIn() &&
@@ -114,6 +119,22 @@ service cloud.firestore {
                         isValidProduct(incoming());
 
         allow delete: if isOwnerOfRestaurant(restaurantId);
+      }
+
+      // orders nested sub-collection
+      match /orders/{orderId} {
+        // Customers can place orders (write)
+        allow create: if isValidId(orderId);
+        // Only restaurant owner can read/write logs
+        allow read, update, delete: if isOwnerOfRestaurant(restaurantId);
+      }
+
+      // views_log nested sub-collection
+      match /views_log/{viewId} {
+        // Visitors can log a view (write)
+        allow create: if isValidId(viewId);
+        // Only restaurant owner can read/write logs
+        allow read, update, delete: if isOwnerOfRestaurant(restaurantId);
       }
     }
   }

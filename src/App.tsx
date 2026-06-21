@@ -19,6 +19,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isDemo, setIsDemo] = useState<boolean>(false);
   const [authChecking, setAuthChecking] = useState<boolean>(true);
+  const [lang, setLang] = useState<'ar' | 'en'>('ar');
 
   // 1. Detect dynamic URL queries on first render
   useEffect(() => {
@@ -111,6 +112,8 @@ export default function App() {
           user={currentUser} 
           onNavigate={handleNavigate} 
           onLogin={() => handleNavigate('login')} 
+          lang={lang}
+          onToggleLang={() => setLang(prev => prev === 'ar' ? 'en' : 'ar')}
         />
       )}
 
@@ -127,6 +130,8 @@ export default function App() {
           isDemo={isDemo}
           onLogout={handleLogout}
           onNavigateToMenu={(slug) => handleNavigate('menu', slug)}
+          lang={lang}
+          onChangeLang={setLang}
         />
       )}
 
@@ -134,6 +139,7 @@ export default function App() {
         <MenuViewer 
           restaurantSlug={selectedSlug} 
           onBackToLanding={() => handleNavigate('landing')}
+          lang={lang}
         />
       )}
     </div>

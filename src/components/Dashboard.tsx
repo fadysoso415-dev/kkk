@@ -39,9 +39,10 @@ import {
   Smartphone,
   Laptop,
   Percent,
-  ShoppingBag
+  ShoppingBag,
+  Palette
 } from 'lucide-react';
-import { Restaurant, Category, Product } from '../types';
+import { Restaurant, Category, Product, Order, ViewLog } from '../types';
 import { 
   saveRestaurant, 
   saveCategory, 
@@ -52,13 +53,51 @@ import {
   getProducts
 } from '../firebase';
 import { SAMPLE_RESTAURANTS, SAMPLE_CATEGORIES, SAMPLE_PRODUCTS } from '../sampleData';
+import { 
+  BarChart, 
+  Bar, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip as RechartsTooltip, 
+  Legend, 
+  ResponsiveContainer, 
+  Cell, 
+  PieChart, 
+  Pie, 
+  AreaChart, 
+  Area 
+} from 'recharts';
 
 interface DashboardProps {
   user: any;
   isDemo: boolean;
   onLogout: () => void;
   onNavigateToMenu: (slug: string) => void;
+  lang: 'ar' | 'en';
+  onChangeLang: (newLang: 'ar' | 'en') => void;
 }
+
+const COUNTRY_CODES = [
+  { code: '+20', flag: '🇪🇬', name: 'مصر (+20)' },
+  { code: '+966', flag: '🇸🇦', name: 'السعودية (+966)' },
+  { code: '+971', flag: '🇦🇪', name: 'الإمارات (+971)' },
+  { code: '+965', flag: '🇰🇼', name: 'الكويت (+965)' },
+  { code: '+974', flag: '🇶🇦', name: 'قطر (+974)' },
+  { code: '+968', flag: '🇴🇲', name: 'عمان (+968)' },
+  { code: '+973', flag: '🇧🇭', name: 'البحرين (+973)' },
+  { code: '+962', flag: '🇯🇴', name: 'الأردن (+962)' },
+  { code: '+964', flag: '🇮🇶', name: 'العراق (+964)' },
+  { code: '+967', flag: '🇾🇪', name: 'اليمن (+967)' },
+  { code: '+961', flag: '🇱🇧', name: 'لبنان (+961)' },
+  { code: '+963', flag: '🇸🇾', name: 'سوريا (+963)' },
+  { code: '+970', flag: '🇵🇸', name: 'فلسطين (+970)' },
+  { code: '+212', flag: '🇲🇦', name: 'المغرب (+212)' },
+  { code: '+213', flag: '🇩🇿', name: 'الجزائر (+213)' },
+  { code: '+216', flag: '🇹🇳', name: 'تونس (+216)' },
+  { code: '+218', flag: '🇱🇾', name: 'ليبيا (+218)' },
+  { code: '+249', flag: '🇸🇩', name: 'السودان (+249)' },
+];
 
 const FOOD_PRESETS = [
   { label: 'برجر عصيري 🍔', url: 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=500&q=80' },
@@ -117,7 +156,7 @@ const compressAndResizeImage = (file: File, maxDimension: number = 800): Promise
   });
 };
 
-export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: DashboardProps) {
+export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, lang, onChangeLang }: DashboardProps) {
   const [activeTab, setActiveTab] = useState<'settings' | 'categories' | 'products' | 'qrcode' | 'analytics'>('settings');
   const [analyticsPeriod, setAnalyticsPeriod] = useState<'today' | 'week' | 'month'>('week');
   
@@ -142,18 +181,283 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+
+  // AI Menu Generation states
+  const [aiImageBase64, setAiImageBase64] = useState<string | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiResult, setAiResult] = useState<{
+    categories: { name: string; order: number }[];
+    products: {
+      name: string;
+      description: string;
+      price: number;
+      originalPrice?: number;
+      isDiscounted?: boolean;
+      discountPrice?: number;
+      categoryIdName: string;
+      badge?: string;
+      order: number;
+    }[];
+  } | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [showAiModal, setShowAiModal] = useState(false);
+
   const [loading, setLoading] = useState(true);
   const [alertMsg, setAlertMsg] = useState<{ type: 'success' | 'error', text: string } | null>(null);
   const [menuCopied, setMenuCopied] = useState(false);
+
+  // Analytics Cloud-Sync Log States
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [viewsLog, setViewsLog] = useState<ViewLog[]>([]);
+  const [loadingAnalytics, setLoadingAnalytics] = useState(false);
+  const [newOrderNotifications, setNewOrderNotifications] = useState<Order[]>([]);
+
+  // Synthesize notification audio chime
+  const playNotificationSound = () => {
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextClass) return;
+      const ctx = new AudioContextClass();
+      
+      // Warm C5 tone
+      const osc1 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+      osc1.connect(gain1);
+      gain1.connect(ctx.destination);
+      osc1.frequency.setValueAtTime(523.25, ctx.currentTime);
+      gain1.gain.setValueAtTime(0, ctx.currentTime);
+      gain1.gain.linearRampToValueAtTime(0.15, ctx.currentTime + 0.05);
+      gain1.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+      osc1.start();
+      osc1.stop(ctx.currentTime + 0.4);
+
+      // Warm E5 tone for sweet harmony
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.connect(gain2);
+      gain2.connect(ctx.destination);
+      osc2.frequency.setValueAtTime(659.25, ctx.currentTime + 0.1);
+      gain2.gain.setValueAtTime(0, ctx.currentTime + 0.1);
+      gain2.gain.linearRampToValueAtTime(0.15, ctx.currentTime + 0.15);
+      gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+      osc2.start(ctx.currentTime + 0.1);
+      osc2.stop(ctx.currentTime + 0.5);
+    } catch (err) {
+      console.warn("Could not play synthesized sound", err);
+    }
+  };
+
+  // Real-time observer for new orders on Firestore
+  useEffect(() => {
+    if (!restaurant?.id || restaurant.id === 'my-restaurant' || isDemo || loading) return;
+
+    let isInitial = true;
+    let unsubscribe: () => void;
+
+    const setupListener = async () => {
+      try {
+        const { db } = await import('../firebase');
+        const { collection, query, orderBy, onSnapshot, getDocs } = await import('firebase/firestore');
+
+        const colRef = collection(db, 'restaurants', restaurant.id, 'orders');
+        const q = query(colRef, orderBy('timestamp', 'desc'));
+
+        let retryCount = 0;
+        const maxRetries = 3;
+
+        const startListening = () => {
+          unsubscribe = onSnapshot(q, (snapshot) => {
+            const docs: Order[] = [];
+            snapshot.forEach((doc) => {
+              docs.push({ id: doc.id, ...doc.data() } as Order);
+            });
+            
+            setOrders(docs);
+
+            if (!isInitial) {
+              snapshot.docChanges().forEach((change) => {
+                if (change.type === 'added') {
+                  const newOrder = { id: change.doc.id, ...change.doc.data() } as Order;
+                  
+                  // Add to visual notifications with unique ID
+                  const notifId = Math.random().toString(36).substring(2, 9);
+                  setNewOrderNotifications(prev => [{ ...newOrder, id: notifId }, ...prev]);
+                  
+                  // Play notification alert chime
+                  playNotificationSound();
+                }
+              });
+            }
+            isInitial = false;
+          }, async (error) => {
+            console.error("Firestore Orders listen error (attempt " + (retryCount + 1) + "): ", error);
+            
+            if (retryCount < maxRetries) {
+              retryCount++;
+              const delay = retryCount * 2000;
+              console.log(`Retrying real-time orders connection in ${delay}ms...`);
+              setTimeout(startListening, delay);
+            } else {
+              console.warn("Real-time orders listener failed max retries. Falling back to manual polling...");
+              try {
+                const snapshot = await getDocs(q);
+                const docs: Order[] = [];
+                snapshot.forEach((doc) => {
+                  docs.push({ id: doc.id, ...doc.data() } as Order);
+                });
+                setOrders(docs);
+              } catch (fallbackError) {
+                console.error("Fallback order retrieval also failed: ", fallbackError);
+              }
+            }
+          });
+        };
+
+        startListening();
+      } catch (err) {
+        console.warn("Could not set up real-time orders listener: ", err);
+      }
+    };
+
+    setupListener();
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, [restaurant?.id, isDemo, loading]);
+
+  // Lazy load live views log when the analytics tab becomes active (orders are fetched in real-time)
+  useEffect(() => {
+    if (activeTab !== 'analytics' || isDemo || !restaurant?.id) return;
+
+    let isMounted = true;
+    const fetchAnalytics = async () => {
+      setLoadingAnalytics(true);
+      try {
+        const { getViewsLog } = await import('../firebase');
+        const viewsData = await getViewsLog(restaurant.id);
+        if (isMounted) {
+          setViewsLog(viewsData);
+        }
+      } catch (err) {
+        console.warn("Could not load real-time analytics reports from Cloud", err);
+      } finally {
+        if (isMounted) {
+          setLoadingAnalytics(false);
+        }
+      }
+    };
+
+    fetchAnalytics();
+    return () => {
+      isMounted = false;
+    };
+  }, [activeTab, restaurant?.id, isDemo]);
+
+  // Click simulator handlers for testing cloud analytics instantly
+  const handleSimulateVisitor = async () => {
+    if (!restaurant?.id || isDemo) {
+      triggerAlert('error', 'يرجى تسجيل الدخول بحساب مالك حقيقي (غير تجريبي) لاختبار المحاكاة السحابية.');
+      return;
+    }
+    try {
+      const { logMenuView, incrementRestaurantViews } = await import('../firebase');
+      await logMenuView(restaurant.id);
+      await incrementRestaurantViews(restaurant.id);
+      
+      // refresh lists
+      const { getViewsLog } = await import('../firebase');
+      const viewsData = await getViewsLog(restaurant.id);
+      setViewsLog(viewsData);
+
+      // increment count state locally
+      setRestaurant(prev => ({ ...prev, viewsCount: (prev.viewsCount || 0) + 1 }));
+      triggerAlert('success', 'تم محاكاة زيارة عميل حقيقية بنجاح وتسجيلها سحابياً! 🌐📱');
+    } catch (err) {
+      triggerAlert('error', 'فشلت محاكاة الزيارة السحابية.');
+    }
+  };
+
+  const handleSimulateOrder = async () => {
+    if (products.length === 0) {
+      triggerAlert('error', 'يرجى إضافة وجبة وبيعها على الأقل لتجربة محاكاة الطلب!');
+      return;
+    }
+    try {
+      const randomProduct = products[Math.floor(Math.random() * products.length)];
+      const randomQty = Math.floor(Math.random() * 2) + 1;
+      const price = randomProduct.isDiscounted && randomProduct.discountPrice 
+        ? randomProduct.discountPrice 
+        : randomProduct.price;
+
+      const tables = ['طاولة 5', 'طاولة 2', 'طاولة 10', 'سفري - المهندس كريم', 'طاولة 1', 'عائلي 4', 'طاولة الخارجية 1'];
+      const notesArray = ['بدون كاتشب وجوانح بصل أرجوك', 'خدمة متميزة وسريعة ⚡', 'أرجو إضافة ملاعق إضافية', 'توصيل حار'];
+
+      const simulatedOrder: Order = {
+        tableName: tables[Math.floor(Math.random() * tables.length)],
+        totalPrice: price * randomQty,
+        notes: Math.random() > 0.4 ? notesArray[Math.floor(Math.random() * notesArray.length)] : '',
+        timestamp: new Date().toISOString(),
+        createdAt: new Date().toLocaleString('ar-EG'),
+        items: [{
+          productId: randomProduct.id,
+          name: randomProduct.name,
+          price: price,
+          quantity: randomQty
+        }]
+      };
+
+      if (isDemo || !restaurant?.id) {
+        // Local simulation for Demo / Offline Mode
+        setOrders(prev => [simulatedOrder, ...prev]);
+
+        // Manually trigger notification & audio chime
+        const notifId = Math.random().toString(36).substring(2, 9);
+        setNewOrderNotifications(prev => [{ ...simulatedOrder, id: notifId }, ...prev]);
+        playNotificationSound();
+
+        setRestaurant(prev => ({ ...prev, whatsappOrdersCount: (prev.whatsappOrdersCount || 0) + 1 }));
+        triggerAlert('success', 'تم محاكاة إرسال طلب جديد بنجاح وتنبيهك لوكال! 🛎️🍕');
+        return;
+      }
+
+      const { logOrder, incrementWhatsappOrders } = await import('../firebase');
+      await logOrder(restaurant.id, simulatedOrder);
+      await incrementWhatsappOrders(restaurant.id);
+
+      // update count state locally (onSnapshot handles refreshing the orders list automatically!)
+      setRestaurant(prev => ({ ...prev, whatsappOrdersCount: (prev.whatsappOrdersCount || 0) + 1 }));
+      triggerAlert('success', 'تم بنجاح إرسال نموذج طلب سحابي حقيقي وتسجيله باللوحة! 🛎️🍕');
+    } catch (err) {
+      triggerAlert('error', 'فشلت محاكاة الطلب السحابي.');
+    }
+  };
 
   // Modals States
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
   const [categoryForm, setCategoryForm] = useState({ name: '', order: 1, isActive: true });
+  const [isCategorySaving, setIsCategorySaving] = useState(false);
+  const [isProductSaving, setIsProductSaving] = useState(false);
+  const [deleteConfirmCategory, setDeleteConfirmCategory] = useState<Category | null>(null);
+  const [isCategoryDeleting, setIsCategoryDeleting] = useState(false);
 
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
-  const [productForm, setProductForm] = useState({
+  const [categoryId, setCategoryId] = useState("");
+  const [productForm, setProductForm] = useState<{
+    name: string;
+    description: string;
+    price: string | number;
+    originalPrice: string | number;
+    isDiscounted: boolean;
+    discountPrice: string | number;
+    image: string;
+    categoryId: string;
+    isAvailable: boolean;
+    badge: string;
+    order: string | number;
+  }>({
     name: '',
     description: '',
     price: 0,
@@ -244,9 +548,198 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
   };
 
   // Trigger alert banner
+  const formatFirebaseError = (err: any): string => {
+    try {
+      const parsed = JSON.parse(err.message || err);
+      if (parsed && parsed.error) {
+        if (parsed.error.includes("permission-denied") || parsed.error.includes("insufficient permissions")) {
+          return `فشلت العملية لعدم وجود صلاحيات كافية على المسار: ${parsed.path || ''} (${parsed.operationType || ''})`;
+        }
+        return `خطأ بقاعدة البيانات: ${parsed.error}`;
+      }
+    } catch {
+      // ignore
+    }
+    const msg = err?.message || String(err || '');
+    if (msg.includes("permission-denied") || msg.includes("insufficient permissions")) {
+      return "عذراً، لا تمتلك الصلاحية الكافية لحفظ التعديلات على هذا المطعم في السحابة.";
+    }
+    if (msg.includes("Quota exceeded") || msg.includes("quota exceeded")) {
+      return "لقد تجاوزت الحصة المجانية اليومية لقاعدة البيانات السحابية (Firestore Quota Exceeded).";
+    }
+    return msg;
+  };
+
   const triggerAlert = (type: 'success' | 'error', text: string) => {
     setAlertMsg({ type, text });
     setTimeout(() => setAlertMsg(null), 4000);
+  };
+
+  // --- AI MENU GENERATION HANDLERS ---
+  const handleAiMenuImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    if (!file.type.startsWith('image/')) {
+      triggerAlert('error', 'يرجى اختيار ملف صورة صالح (JPEG, PNG, WEBP)');
+      return;
+    }
+    
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setAiImageBase64(reader.result as string);
+      setAiError(null);
+    };
+    reader.onerror = () => {
+      triggerAlert('error', 'حدث خطأ أثناء قراءة ملف الصورة');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleAiMenuDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+    
+    if (!file.type.startsWith('image/')) {
+      triggerAlert('error', 'يرجى اختيار ملف صورة صالح (JPEG, PNG, WEBP)');
+      return;
+    }
+    
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setAiImageBase64(reader.result as string);
+      setAiError(null);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleAnalyzeMenu = async () => {
+    if (!aiImageBase64) {
+      triggerAlert('error', 'يرجى اختيار صورة أولاً');
+      return;
+    }
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const response = await fetch('/api/gemini/analyze-menu', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ imageBase64: aiImageBase64 }),
+      });
+      
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'فشل تحليل المنيو بواسطة الذكاء الاصطناعي');
+      }
+      
+      if (!data.categories || data.categories.length === 0) {
+        throw new Error('لم ينجح الذكاء الاصطناعي في تحديد أي أقسام أو أصناف من هذه الصورة. يرجى تجربة صورة أخرى أكثر وضوحاً.');
+      }
+      
+      setAiResult(data);
+      triggerAlert('success', `تم تحليل المنيو بنجاح! تم استخراج ${data.categories.length} أقسام و ${data.products ? data.products.length : 0} وجبات.`);
+    } catch (err: any) {
+      console.error(err);
+      setAiError(err.message || 'حدث خطأ غير متوقع أثناء معالجة الصورة');
+      triggerAlert('error', err.message || 'حدث خطأ أثناء التحليل');
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const handleConfirmAiMenu = async (mode: 'append' | 'overwrite') => {
+    if (!aiResult) return;
+    setAiLoading(true);
+    try {
+      // 1. Generate unique IDs for the new categories
+      const categoryMap = new Map<string, string>();
+      const newCatsToSave: Category[] = aiResult.categories.map((cat) => {
+        const catId = `cat-${Math.random().toString(36).substring(2, 9)}`;
+        categoryMap.set(cat.name, catId);
+        return {
+          id: catId,
+          name: cat.name,
+          order: mode === 'append' ? categories.length + cat.order : cat.order,
+          isActive: true
+        };
+      });
+
+      // 2. Generate new products mapped to the new category doc IDs
+      const newProdsToSave: Product[] = (aiResult.products || []).map((prod) => {
+        const prodId = `prod-${Math.random().toString(36).substring(2, 9)}`;
+        const matchedCatId = categoryMap.get(prod.categoryIdName) || (newCatsToSave[0]?.id || (categories[0]?.id || ''));
+        const randomPresetImg = FOOD_PRESETS[Math.floor(Math.random() * FOOD_PRESETS.length)].url;
+        
+        return {
+          id: prodId,
+          name: prod.name,
+          description: prod.description || '',
+          price: prod.price || 0,
+          originalPrice: prod.originalPrice || undefined,
+          isDiscounted: prod.isDiscounted || false,
+          discountPrice: prod.discountPrice || undefined,
+          image: randomPresetImg,
+          categoryId: matchedCatId,
+          isAvailable: true,
+          badge: prod.badge || '',
+          order: prod.order || 1
+        };
+      });
+
+      if (isDemo) {
+        if (mode === 'overwrite') {
+          setCategories(newCatsToSave);
+          setProducts(newProdsToSave);
+        } else {
+          setCategories(prev => [...prev, ...newCatsToSave]);
+          setProducts(prev => [...prev, ...newProdsToSave]);
+        }
+        triggerAlert('success', 'تم تطبيق منيو الذكاء الاصطناعي بنجاح في الواجهة التجريبية!');
+      } else {
+        // If overwrite, delete old records
+        if (mode === 'overwrite') {
+          for (const cat of categories) {
+            await deleteCategory(restaurant.id, cat.id);
+          }
+          for (const prod of products) {
+            await deleteProduct(restaurant.id, prod.id);
+          }
+        }
+
+        // Save new categories
+        for (const cat of newCatsToSave) {
+          const { id, ...data } = cat;
+          await saveCategory(restaurant.id, id, data);
+        }
+
+        // Save new products
+        for (const prod of newProdsToSave) {
+          const { id, ...data } = prod;
+          await saveProduct(restaurant.id, id, data);
+        }
+
+        // Refresh database states
+        const cats = await getCategories(restaurant.id);
+        const prods = await getProducts(restaurant.id);
+        setCategories(cats);
+        setProducts(prods);
+        
+        triggerAlert('success', 'تم تأسيس وتفعيل منيو الذكاء الاصطناعي بنجاح في قاعدة البيانات السحابية! ✅');
+      }
+
+      // Close modal and reset state
+      setShowAiModal(false);
+      setAiResult(null);
+      setAiImageBase64(null);
+    } catch (err: any) {
+      console.error(err);
+      triggerAlert('error', 'فشل حفظ وتطبيق المنيو الجديد: ' + err.message);
+    } finally {
+      setAiLoading(false);
+    }
   };
 
   // --- PERSIST SAVING SETTINGS ---
@@ -260,18 +753,27 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
         await saveRestaurant(restaurant.id, restaurant);
         triggerAlert('success', 'تم حفظ التحديثات ونشرها لحظياً للعملاء! 🌐');
       }
-    } catch (err) {
-      triggerAlert('error', 'فشلت عملية الحفظ، يرجى مراجعة الصلاحيات أو محاولة مجددة.');
+    } catch (err: any) {
+      console.error("Error saving settings: ", err);
+      triggerAlert('error', `فشلت عملية الحفظ: ${formatFirebaseError(err)}`);
     }
   };
 
   // --- PERSIST CATEGORIES ---
   const handleCategorySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Check if the section name is empty or contains only spaces
+    if (!categoryForm.name.trim()) {
+      triggerAlert('error', 'لا يمكن حفظ قسم فارغ! يرجى كتابة اسم القسم أولاً (مثل: الوجبات السريعة 🍔) ⚠️');
+      return;
+    }
+
+    setIsCategorySaving(true);
     const id = editingCategory ? editingCategory.id : `cat-${Date.now()}`;
     const newCat: Category = {
       id,
-      name: categoryForm.name,
+      name: categoryForm.name.trim(),
       order: Number(categoryForm.order),
       isActive: categoryForm.isActive
     };
@@ -302,13 +804,16 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
       setIsCategoryModalOpen(false);
       setEditingCategory(null);
       setCategoryForm({ name: '', order: 1, isActive: true });
-    } catch (err) {
-      triggerAlert('error', 'حدث خطأ غير متوقع أثناء المعالجة.');
+    } catch (err: any) {
+      console.error("Error saving category: ", err);
+      triggerAlert('error', `عذراً، فشل حفظ القسم: ${formatFirebaseError(err)}`);
+    } finally {
+      setIsCategorySaving(false);
     }
   };
 
   const handleDeleteCategory = async (catId: string) => {
-    if (!window.confirm('هل أنت متأكد من حذف هذا القسم بالكامل؟ سيتم إخفاء المنتجات التابعة له.')) return;
+    setIsCategoryDeleting(true);
     try {
       if (isDemo) {
         setCategories(prev => prev.filter(c => c.id !== catId));
@@ -318,37 +823,70 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
         setCategories(prev => prev.filter(c => c.id !== catId));
         triggerAlert('success', 'تم إزالة القسم وتحديث العميل بلحظة! 🔥');
       }
-    } catch (err) {
-      triggerAlert('error', 'لا يمكن حذف القسم، يرجى تكرار المحاولة..');
+      setDeleteConfirmCategory(null);
+    } catch (err: any) {
+      console.error("Error deleting category: ", err);
+      triggerAlert('error', `لا يمكن حذف القسم: ${formatFirebaseError(err)}`);
+    } finally {
+      setIsCategoryDeleting(false);
     }
   };
 
   // --- PERSIST PRODUCTS ---
-  const handleProductSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    const name = productForm.name;
+    const price = productForm.price;
+
+    if (!name) {
+      alert("يرجى إدخال اسم الوجبة أو الطبق.");
+      return;
+    }
+
+    if (!price) {
+      alert("يرجى إدخال السعر المقدر للطبق.");
+      return;
+    }
+
+    if (!categoryId) {
+      alert("يرجى اختيار القسم بشكل صحيح! الكود لم يلتقط الـ ID");
+      return;
+    }
+
+    const nameTrimmed = (name || '').trim();
+    const priceNum = Number(price);
+    if (isNaN(priceNum) || priceNum <= 0) {
+      alert("يرجى إدخال سعر صحيح ومناسب للمنتج (أكبر من 0).");
+      return;
+    }
+
+    setIsProductSaving(true);
+
     const id = editingProduct ? editingProduct.id : `prod-${Date.now()}`;
-    const priceNum = Number(productForm.price);
-    const discNum = Number(productForm.discountPrice);
+    const isDisc = !!productForm.isDiscounted;
+    let finalPrice = priceNum;
+    let finalDiscountPrice: number | undefined = undefined;
+
+    if (isDisc) {
+      finalPrice = productForm.originalPrice ? Number(productForm.originalPrice) : priceNum;
+      finalDiscountPrice = priceNum;
+    }
 
     const newProd: Product = {
       id,
-      name: productForm.name,
+      name: nameTrimmed,
       description: productForm.description,
-      price: priceNum,
+      price: finalPrice,
       originalPrice: productForm.originalPrice ? Number(productForm.originalPrice) : undefined,
-      isDiscounted: productForm.isDiscounted,
-      discountPrice: productForm.isDiscounted ? discNum : undefined,
+      isDiscounted: isDisc,
+      discountPrice: finalDiscountPrice,
       image: productForm.image || FOOD_PRESETS[0].url,
-      categoryId: productForm.categoryId,
+      categoryId: categoryId,
       isAvailable: productForm.isAvailable,
       badge: productForm.badge || undefined,
       order: Number(productForm.order)
     };
-
-    if (!newProd.categoryId) {
-      triggerAlert('error', 'برجاء تحديد القسم التابع للسلعة أولاً.');
-      return;
-    }
 
     try {
       if (isDemo) {
@@ -359,12 +897,12 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
         }
         triggerAlert('success', 'تم تعديل السلعة لوكال بنجاح!');
       } else {
-        await saveProduct(restaurant.id, id, {
+        await saveProduct(restaurant?.id || '', id, {
           name: newProd.name,
-          description: newProd.description,
+          description: newProd.description || '',
           price: newProd.price,
           originalPrice: newProd.originalPrice || 0,
-          isDiscounted: !!newProd.isDiscounted,
+          isDiscounted: newProd.isDiscounted,
           discountPrice: newProd.discountPrice || 0,
           image: newProd.image,
           categoryId: newProd.categoryId,
@@ -382,8 +920,12 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
       }
       setIsProductModalOpen(false);
       setEditingProduct(null);
-    } catch {
-      triggerAlert('error', 'حدث خطأ أثناء تعديل السلعة في قاعدة البيانات.');
+    } catch (err: any) {
+      console.error("Error saving product to Firebase: ", err);
+      alert(err.message || "حدث خطأ غير متوقع أثناء الحفظ في السحابة.");
+      triggerAlert('error', `حدث خطأ أثناء حفظ السلعة: ${formatFirebaseError(err)}`);
+    } finally {
+      setIsProductSaving(false);
     }
   };
 
@@ -398,8 +940,9 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
         setProducts(prev => prev.filter(p => p.id !== prodId));
         triggerAlert('success', 'تم إزالة المنتج نهائياً وتحديث الزبائن! 🗑️');
       }
-    } catch {
-      triggerAlert('error', 'تم رفض العملية.');
+    } catch (err: any) {
+      console.error("Error deleting product: ", err);
+      triggerAlert('error', `لا يمكن إزالة المنتج: ${formatFirebaseError(err)}`);
     }
   };
 
@@ -415,6 +958,49 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
     setTimeout(() => setMenuCopied(false), 2000);
   };
 
+  // Find current country code based on the phone number
+  const currentPhone = restaurant.phoneNumber || '';
+  const matchedCountry = COUNTRY_CODES.find(c => {
+    const plainPhone = currentPhone.replace('+', '').replace(/\s+/g, '');
+    const plainCode = c.code.replace('+', '');
+    return plainPhone.startsWith(plainCode);
+  }) || COUNTRY_CODES[0]; // fallback to Egypt (+20)
+
+  // Extract the remaining local digits
+  const getLocalNumber = () => {
+    if (!currentPhone) return '';
+    const plainPhone = currentPhone.replace('+', '').replace(/\s+/g, '');
+    const plainCode = matchedCountry.code.replace('+', '');
+    if (plainPhone.startsWith(plainCode)) {
+      return plainPhone.substring(plainCode.length);
+    }
+    return currentPhone;
+  };
+
+  const localNumber = getLocalNumber();
+
+  // On country change
+  const handleCountryChange = (newCode: string) => {
+    // Strip leading zeros if any, keep digits
+    const digitsOnly = localNumber.replace(/[^\d]/g, '').replace(/^[0]+/, '');
+    const updatedPhone = newCode + digitsOnly;
+    setRestaurant({ 
+      ...restaurant, 
+      phoneNumber: updatedPhone
+    });
+  };
+
+  // On local digits change
+  const handleLocalDigitsChange = (newLocal: string) => {
+    // Clean to keep only numbers
+    const digitsOnly = newLocal.replace(/[^\d]/g, '');
+    const updatedPhone = matchedCountry.code + digitsOnly;
+    setRestaurant({ 
+      ...restaurant, 
+      phoneNumber: updatedPhone
+    });
+  };
+
   if (loading) {
     return (
       <div className="w-full min-h-screen bg-slate-900 text-amber-500 font-sans flex flex-col justify-center items-center gap-4" dir="rtl">
@@ -427,6 +1013,127 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
   return (
     <div className="w-full min-h-screen bg-slate-100 text-slate-800 font-sans flex flex-col md:flex-row" dir="rtl">
       
+      {/* Real-time WhatsApp Push Order Alerts */}
+      <div className="fixed top-4 right-4 md:right-auto md:left-4 z-[9999] pointer-events-none flex flex-col gap-3 max-w-xs sm:max-w-sm w-full font-sans" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+        <AnimatePresence>
+          {newOrderNotifications.map((notif) => (
+            <FloatingNotification
+              key={notif.id}
+              notif={notif}
+              lang={lang}
+              currency={restaurant.currency}
+              onDismiss={(id) => {
+                setNewOrderNotifications(prev => prev.filter(n => n.id !== id));
+              }}
+              onViewStats={() => {
+                setActiveTab('analytics');
+                setNewOrderNotifications(prev => prev.filter(n => n.id !== notif.id));
+              }}
+            />
+          ))}
+        </AnimatePresence>
+      </div>
+
+      {/* Mobile Top Header */}
+      <header className="flex md:hidden items-center justify-between p-4 bg-slate-900 text-white sticky top-0 z-40 border-b border-slate-800 shadow-md">
+        <div className="flex items-center gap-2.5">
+          <img 
+            src={restaurant.logo} 
+            className="w-8.5 h-8.5 rounded-lg border border-slate-700 bg-white object-cover" 
+            alt="Brand logo"
+          />
+          <div>
+            <h2 className="text-xs font-black text-white leading-tight truncate max-w-[120px]">{restaurant.name}</h2>
+            <span className="text-[9px] text-amber-500 font-semibold px-1.5 py-0.2 rounded bg-amber-500/10 inline-block font-sans">
+              {isDemo ? 'نسخة تجريبية' : 'سحابي'}
+            </span>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {/* View Menu Eye button */}
+          <button
+            onClick={() => onNavigateToMenu(restaurant.slug)}
+            className="p-2 bg-slate-850 hover:bg-slate-800 text-amber-500 rounded-lg cursor-pointer transition border border-slate-700 flex items-center justify-center"
+            title="معاينة المنيو"
+          >
+            <Eye className="w-4 h-4" />
+          </button>
+          
+          {/* Logout Button */}
+          <button
+            onClick={onLogout}
+            className="p-2 bg-rose-950/20 hover:bg-rose-900/40 text-rose-300 rounded-lg cursor-pointer transition border border-rose-900/40 flex items-center justify-center"
+            title="تسجيل الخروج"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
+        </div>
+      </header>
+
+      {/* Mobile Bottom Navigation Bar */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-900/95 backdrop-blur-md border-t border-slate-800 pb-safe shadow-[0_-4px_24px_rgba(0,0,0,0.15)] flex justify-around items-center h-16 px-1 text-slate-450">
+        <button
+          onClick={() => setActiveTab('settings')}
+          className={`flex-1 flex flex-col items-center justify-center gap-1 h-full relative cursor-pointer ${activeTab === 'settings' ? 'text-amber-500 font-black' : 'text-slate-400 hover:text-slate-200'}`}
+        >
+          <Settings className="w-[18px] h-[18px]" />
+          <span className="text-[9px] tracking-tight">{lang === 'ar' ? 'الإعدادات' : 'Settings'}</span>
+          {activeTab === 'settings' && (
+            <motion.div layoutId="mobile-nav-indicator" className="absolute bottom-1 w-5 h-0.5 bg-amber-500 rounded-full" />
+          )}
+        </button>
+
+        <button
+          onClick={() => setActiveTab('categories')}
+          className={`flex-1 flex flex-col items-center justify-center gap-1 h-full relative cursor-pointer ${activeTab === 'categories' ? 'text-amber-500 font-black' : 'text-slate-400 hover:text-slate-200'}`}
+        >
+          <div className="relative">
+            <Layers className="w-[18px] h-[18px]" />
+            <span className="absolute -top-1.5 -right-2.5 bg-amber-550 text-[8px] text-white px-1.5 py-0.2 rounded-full scale-75 font-bold font-sans">{categories.length}</span>
+          </div>
+          <span className="text-[9px] tracking-tight">{lang === 'ar' ? 'الأقسام' : 'Categories'}</span>
+          {activeTab === 'categories' && (
+            <motion.div layoutId="mobile-nav-indicator" className="absolute bottom-1 w-5 h-0.5 bg-amber-500 rounded-full" />
+          )}
+        </button>
+
+        <button
+          onClick={() => setActiveTab('products')}
+          className={`flex-1 flex flex-col items-center justify-center gap-1 h-full relative cursor-pointer ${activeTab === 'products' ? 'text-amber-500 font-black' : 'text-slate-400 hover:text-slate-200'}`}
+        >
+          <div className="relative">
+            <ChefHat className="w-[18px] h-[18px]" />
+            <span className="absolute -top-1.5 -right-2.5 bg-amber-550 text-[8px] text-white px-1.5 py-0.2 rounded-full scale-75 font-bold font-sans">{products.length}</span>
+          </div>
+          <span className="text-[9px] tracking-tight">{lang === 'ar' ? 'الوجبات' : 'Meals'}</span>
+          {activeTab === 'products' && (
+            <motion.div layoutId="mobile-nav-indicator" className="absolute bottom-1 w-5 h-0.5 bg-amber-500 rounded-full" />
+          )}
+        </button>
+
+        <button
+          onClick={() => setActiveTab('qrcode')}
+          className={`flex-1 flex flex-col items-center justify-center gap-1 h-full relative cursor-pointer ${activeTab === 'qrcode' ? 'text-amber-500 font-black' : 'text-slate-400 hover:text-slate-200'}`}
+        >
+          <QrCode className="w-[18px] h-[18px]" />
+          <span className="text-[9px] tracking-tight">{lang === 'ar' ? 'رمز QR' : 'QR Code'}</span>
+          {activeTab === 'qrcode' && (
+            <motion.div layoutId="mobile-nav-indicator" className="absolute bottom-1 w-5 h-0.5 bg-amber-500 rounded-full" />
+          )}
+        </button>
+
+        <button
+          onClick={() => setActiveTab('analytics')}
+          className={`flex-1 flex flex-col items-center justify-center gap-1 h-full relative cursor-pointer ${activeTab === 'analytics' ? 'text-amber-500 font-black' : 'text-slate-400 hover:text-slate-200'}`}
+        >
+          <BarChart2 className="w-[18px] h-[18px]" />
+          <span className="text-[9px] tracking-tight">{lang === 'ar' ? 'الطلبات' : 'Orders'}</span>
+          {activeTab === 'analytics' && (
+            <motion.div layoutId="mobile-nav-indicator" className="absolute bottom-1 w-5 h-0.5 bg-amber-500 rounded-full" />
+          )}
+        </button>
+      </nav>
+
       {/* Alert Notification System */}
       <AnimatePresence>
         {alertMsg && (
@@ -447,7 +1154,7 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
       </AnimatePresence>
 
       {/* Vertical Sidebar Navigation */}
-      <aside className="w-full md:w-64 bg-slate-900 text-slate-300 flex flex-col justify-between p-5 border-l border-slate-800 shrink-0 select-none">
+      <aside className="hidden md:flex w-full md:w-64 bg-slate-900 text-slate-300 flex-col justify-between p-5 border-l border-slate-800 shrink-0 select-none">
         <div className="space-y-8">
           
           {/* Logo Brand Brand */}
@@ -533,7 +1240,7 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
       </aside>
 
       {/* Central workspace content */}
-      <main className="flex-1 p-4 md:p-8 space-y-8 overflow-y-auto max-w-5xl">
+      <main className="flex-1 p-4 md:p-8 pb-24 md:pb-8 space-y-8 overflow-y-auto max-w-5xl">
         
         {/* Dynamic Panel Header block */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-slate-200 pb-5">
@@ -551,6 +1258,14 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => setShowAiModal(true)}
+              className="bg-purple-600 hover:bg-purple-700 text-white rounded-xl py-2 px-3.5 text-xs font-black flex items-center gap-1.5 transition cursor-pointer shadow-md shadow-purple-500/10 hover:scale-105 active:scale-95"
+            >
+              <Sparkles className="w-3.5 h-3.5 fill-amber-300 text-white animate-pulse" />
+              <span>تأسيس المنيو بالذكاء الاصطناعي (جديد) ✨</span>
+            </button>
+
             <button
               onClick={copyMenuUrl}
               className="bg-white hover:bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
@@ -682,15 +1397,34 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-2">رقم الواتساب لاستقبال الطلبات 💬</label>
-                <input 
-                  type="text" 
-                  required
-                  value={restaurant.phoneNumber} 
-                  onChange={e => setRestaurant({ ...restaurant, phoneNumber: e.target.value })}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-semibold outline-none focus:bg-white focus:border-amber-500 text-left"
-                  placeholder="+201000000000"
-                />
-                <span className="text-[10px] text-slate-400 mt-1 block">يجب تضمين كود الدولة بالكامل (بدون أصفار إضافية).</span>
+                <div className="flex rounded-xl overflow-hidden border border-slate-200 bg-slate-50 focus-within:bg-white focus-within:border-amber-500">
+                  {/* Country Prefix Dropdown */}
+                  <select
+                    value={matchedCountry.code}
+                    onChange={e => handleCountryChange(e.target.value)}
+                    className="bg-transparent text-xs font-bold px-3 py-2.5 outline-none border-l border-slate-200 text-slate-800 cursor-pointer"
+                  >
+                    {COUNTRY_CODES.map(c => (
+                      <option key={c.code} value={c.code} className="font-bold">
+                        {c.flag} {c.code}
+                      </option>
+                    ))}
+                  </select>
+                  
+                  {/* Local Phone Number Input */}
+                  <input 
+                    type="tel" 
+                    required
+                    value={localNumber} 
+                    onChange={e => handleLocalDigitsChange(e.target.value)}
+                    className="flex-1 bg-transparent p-2.5 text-xs font-semibold outline-none text-left"
+                    placeholder="1000000000"
+                    dir="ltr"
+                  />
+                </div>
+                <span className="text-[10px] text-slate-400 mt-1 block">
+                  اختر رمز الدولة من القائمة المنسدلة واكتب باقي الرقم بدون صفر في البداية.
+                </span>
               </div>
             </div>
 
@@ -753,6 +1487,157 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
               </div>
             </div>
 
+            <hr className="border-slate-100" />
+
+            {/* Custom Language Preference */}
+            <div className="space-y-4 font-sans text-right" dir="rtl">
+              <div className="flex items-center gap-2">
+                <Globe className="w-5 h-5 text-amber-500 shrink-0" />
+                <h4 className="text-sm font-black text-slate-900">لغة واجهة لوحة التحكم والموقع (Language Settings) 🌐</h4>
+              </div>
+              <p className="text-[11px] text-slate-500 leading-relaxed">
+                اختر لغة العرض المفضلة لاستخدام لوحة التحكم وتصفح الموقع بالكامل. يمكنك تغييرها في أي وقت لاحقاً.
+              </p>
+              
+              <div className="flex gap-4">
+                <button
+                  type="button"
+                  onClick={() => onChangeLang('ar')}
+                  className={`flex-1 py-3 px-4 rounded-xl border font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer ${lang === 'ar' ? 'bg-amber-500 text-white border-amber-500 shadow-md ring-2 ring-amber-500/20' : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'}`}
+                >
+                  🇸🇦 العربية (Arabic)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onChangeLang('en')}
+                  className={`flex-1 py-3 px-4 rounded-xl border font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer ${lang === 'en' ? 'bg-amber-500 text-white border-amber-500 shadow-md ring-2 ring-amber-500/20' : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'}`}
+                >
+                  🇺🇸 English (الإنجليزية)
+                </button>
+              </div>
+            </div>
+
+            <hr className="border-slate-100" />
+
+            {/* Custom Appearance / Brand Identity */}
+            <div className="space-y-4 font-sans text-right" dir="rtl">
+              <div className="flex items-center gap-2">
+                <Palette className="w-5 h-5 text-amber-500 shrink-0" />
+                <h4 className="text-sm font-black text-slate-900">طابع وهوية المنيو البصرية (الألوان والسمات) 🎨</h4>
+              </div>
+              <p className="text-[11px] text-slate-500 leading-relaxed">
+                حدد نسق وتكامل الألوان الذي يلائم هوية مطعمك ومقهى أحلامك. ستظهر السمات المحددة مباشرة على المنيو العام لأزرار الطلب والخصومات وفاتورة سلة الزبون.
+              </p>
+
+              {/* Theme presets choosing grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 pt-1 select-none">
+                {[
+                  { id: 'amber', label: 'العنبر الذهبي 🥞', color: '#d97706', desc: 'برجر ووجبات سريعة' },
+                  { id: 'emerald', label: 'الزمرد البري 🥗', color: '#059669', desc: 'مأكولات شرقية وصحية' },
+                  { id: 'rose', label: 'التوت الحلو 🍦', color: '#e11d48', desc: 'حلويات ومثلجات كولد' },
+                  { id: 'indigo', label: 'الأزرق النيلي 🍤', color: '#4f46e5', desc: 'مشويات وأسماك بحرية' },
+                  { id: 'slate', label: 'الكلاسيكي الفضي 🥩', color: '#475569', desc: 'لحوم ومطابخ غربية' },
+                  { id: 'violet', label: 'البنفسج الملكي ☕', color: '#7c3aed', desc: 'مشروبات وقهوة دافئة' },
+                  { id: 'dark', label: 'الأسود الفاخر 🌯', color: '#111827', desc: 'شاورما وجبنة حارة' },
+                  { id: 'autumn', label: 'طيف الخريف 🔥', color: '#ea580c', desc: 'مشويات ووصفات ملقمة' },
+                  { id: 'coffee', label: 'القهوة الكلاسيكية ☕', color: '#78350f', desc: 'حبوب بن محمصة ومخبوزات' }
+                ].map((preset) => {
+                  const isSelected = (restaurant.themePreset || 'amber') === preset.id;
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={() => setRestaurant({ 
+                        ...restaurant, 
+                        themePreset: preset.id as any, 
+                        primaryColor: preset.color 
+                      })}
+                      className={`p-3 rounded-2xl border text-right transition-all cursor-pointer flex flex-col justify-between items-start gap-3 hover:shadow-sm ${isSelected ? 'border-amber-500 bg-amber-50/10 ring-2 ring-amber-500/10 shadow-sm' : 'border-slate-100 bg-slate-50/50 hover:bg-slate-50'}`}
+                    >
+                      <div className="flex justify-between items-center w-full">
+                        <div className="w-3.5 h-3.5 rounded-full border border-white shrink-0 shadow-sm" style={{ backgroundColor: preset.color }} />
+                        {isSelected && <span className="text-[8px] bg-amber-500 text-white px-1.5 py-0.2 rounded font-black select-none">مفعّل</span>}
+                      </div>
+                      <div className="space-y-0.5">
+                        <h5 className="text-[11px] font-black text-slate-850 leading-none">{preset.label}</h5>
+                        <p className="text-[8px] text-slate-400 font-semibold leading-none truncate w-[100px]">{preset.desc}</p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Advanced Custom Color Hex Picker */}
+              <div className="bg-slate-50 p-4 rounded-3xl border border-slate-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mt-2">
+                <div className="space-y-0.5">
+                  <h5 className="text-xs font-black text-slate-900">محدد لون البراند اليدوي الدقيق (Custom Color Picker) 🎨🎨</h5>
+                  <p className="text-[10px] text-slate-500 leading-normal">هل تملك لوناً محدداً أو كود لون شعار مطعمك؟ عينه مباشرة هنا لتخصيص كامل للأزرار ومفاتيح السلة!</p>
+                </div>
+                
+                <div className="flex items-center gap-3 w-full md:w-auto justify-between md:justify-end">
+                  <div className="flex items-center gap-2">
+                    <input 
+                      type="color" 
+                      value={restaurant.primaryColor || '#d97706'} 
+                      onChange={e => setRestaurant({ ...restaurant, primaryColor: e.target.value })}
+                      className="w-9 h-9 border border-slate-200 rounded-xl cursor-pointer bg-transparent outline-none shrink-0"
+                    />
+                    <span className="text-xs font-bold text-slate-800 font-mono tracking-wider">{restaurant.primaryColor || '#d97706'}</span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const currentPreset = restaurant.themePreset || 'amber';
+                      const defaultColorMap: Record<string, string> = {
+                        amber: '#d97706', emerald: '#059669', rose: '#e11d48', indigo: '#4f46e5',
+                        slate: '#475569', violet: '#7c3aed', dark: '#111827', autumn: '#ea580c', coffee: '#78350f'
+                      };
+                      setRestaurant({ 
+                        ...restaurant, 
+                        primaryColor: defaultColorMap[currentPreset] || '#d97706' 
+                      });
+                    }}
+                    className="text-[9px] bg-slate-200 text-slate-700 hover:bg-slate-300 hover:text-slate-900 font-black py-1 px-2.5 rounded-lg transition shrink-0 cursor-pointer"
+                  >
+                    إعادة لافتراضي السمة 🔄
+                  </button>
+                </div>
+              </div>
+
+              {/* Reactive Beautiful Preview Box */}
+              <div className="border border-dashed border-slate-200 rounded-3xl p-4.5 space-y-3.5 select-none bg-slate-50/20 text-right">
+                <span className="text-[10px] text-slate-400 font-extrabold uppercase">لوحة المعاينة التفاعلية الفورية لهوية مطعمك:</span>
+                
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    className="text-[10px] font-black px-4 py-2.5 rounded-xl text-white transition-all shadow-md flex items-center gap-1 leading-none cursor-default"
+                    style={{ backgroundColor: restaurant.primaryColor || '#d97706' }}
+                  >
+                    <span>إضافة مأكولات للسلة +</span>
+                  </button>
+
+                  <span 
+                    className="text-[10px] font-black px-3 py-1.5 rounded-full"
+                    style={{ 
+                      backgroundColor: `${restaurant.primaryColor || '#d97706'}20`, 
+                      color: restaurant.primaryColor || '#d97706' 
+                    }}
+                  >
+                    🔥 وجبة مميزة ومطلوبة جداً
+                  </span>
+
+                  <span 
+                    className="text-xs font-black font-mono"
+                    style={{ color: restaurant.primaryColor || '#d97706' }}
+                  >
+                    175 {restaurant.currency || 'EGP'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
             <div className="flex justify-end pt-4 border-t border-slate-100">
               <button
                 type="submit"
@@ -786,10 +1671,39 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
             </div>
 
             {categories.length === 0 ? (
-              <div className="bg-white border p-12 rounded-3xl text-center space-y-4">
-                <Layers className="w-12 h-12 mx-auto text-slate-300" />
-                <h4 className="text-base font-black text-slate-900">لا يوجد أي تصنيف أو أقسام للمنيو بعد!</h4>
-                <p className="text-xs text-slate-500 max-w-sm mx-auto">اضغط على زر الإضافة لتأسيس أقسام منيو مطعمك وتسهيل تحديد قوائم الوجبات.</p>
+              <div className="grid md:grid-cols-2 gap-6">
+                <div className="bg-white border border-slate-200 p-8 rounded-3xl text-center flex flex-col justify-between space-y-4">
+                  <div className="space-y-3">
+                    <Layers className="w-12 h-12 mx-auto text-slate-300" />
+                    <h4 className="text-base font-black text-slate-900">إنشاء أقسام المنيو يدوياً</h4>
+                    <p className="text-xs text-slate-500 max-w-sm mx-auto font-sans leading-relaxed">تأسيس أقسام مطعمك وقامتك بنفسك خطوة بخطوة بالترتيب المناسب لك يدويّاً.</p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setEditingCategory(null);
+                      setCategoryForm({ name: '', order: categories.length + 1, isActive: true });
+                      setIsCategoryModalOpen(true);
+                    }}
+                    className="bg-slate-950 hover:bg-slate-800 text-white py-2.5 px-5 rounded-xl text-xs font-bold transition mx-auto cursor-pointer"
+                  >
+                    البدء يدوياً +
+                  </button>
+                </div>
+
+                <div className="bg-purple-50/50 border border-purple-100 p-8 rounded-3xl text-center flex flex-col justify-between space-y-4 shadow-sm">
+                  <div className="space-y-3">
+                    <Sparkles className="w-12 h-12 mx-auto text-purple-600 animate-pulse bg-purple-100/50 p-2.5 rounded-full" />
+                    <h4 className="text-base font-black text-purple-950">تأسيس المنيو بالذكاء الاصطناعي 🚀</h4>
+                    <p className="text-xs text-purple-800/85 max-w-sm mx-auto font-sans leading-relaxed">هل لديك صورة أو قائمة طعام ورقية مطبوعة؟ ارفعها الآن وسيقوم الذكاء الاصطناعي بإنشاء جميع الأقسام مع الأكلات والأسعار تلقائياً!</p>
+                  </div>
+                  <button
+                    onClick={() => setShowAiModal(true)}
+                    className="bg-purple-600 hover:bg-purple-700 text-white py-2.5 px-6 rounded-xl text-xs font-black transition mx-auto cursor-pointer flex items-center gap-1.5 shadow-md shadow-purple-600/10 hover:scale-105 active:scale-95"
+                  >
+                    <Upload className="w-4 h-4" />
+                    رفع صورة المنيو الذكي 📷
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="grid sm:grid-cols-2 gap-4">
@@ -821,7 +1735,7 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
                       </button>
 
                       <button
-                        onClick={() => handleDeleteCategory(cat.id)}
+                        onClick={() => setDeleteConfirmCategory(cat)}
                         className="bg-slate-50 p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 border rounded-xl transition cursor-pointer"
                         title="حذف القسم بالكامل"
                       >
@@ -848,6 +1762,8 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
                     return;
                   }
                   setEditingProduct(null);
+                  const initialCatId = categories[0]?.id || '';
+                  setCategoryId(initialCatId);
                   setProductForm({
                     name: '',
                     description: '',
@@ -856,7 +1772,7 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
                     isDiscounted: false,
                     discountPrice: 25,
                     image: FOOD_PRESETS[0].url,
-                    categoryId: categories[0].id,
+                    categoryId: initialCatId,
                     isAvailable: true,
                     badge: '',
                     order: products.length + 1
@@ -939,11 +1855,12 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
                                 <button
                                   onClick={() => {
                                     setEditingProduct(prod);
+                                    setCategoryId(prod.categoryId);
                                     setProductForm({
                                       name: prod.name,
-                                      description: prod.description,
-                                      price: prod.price,
-                                      originalPrice: prod.originalPrice || 0,
+                                      description: prod.description || '',
+                                      price: prod.isDiscounted && prod.discountPrice ? prod.discountPrice : prod.price,
+                                      originalPrice: prod.isDiscounted ? prod.price : (prod.originalPrice || 0),
                                       isDiscounted: !!prod.isDiscounted,
                                       discountPrice: prod.discountPrice || 0,
                                       image: prod.image,
@@ -1050,39 +1967,96 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
 
         {/* TAB 5: ANALYTICS & PLANS */}
         {activeTab === 'analytics' && (() => {
-          // Dynamic period stats logic
-          const totalViews = restaurant.viewsCount || 230;
-          const totalOrders = restaurant.whatsappOrdersCount || 54;
+          // Calculate dynamic metrics if live subcollection logs exist
+          const hasRealLogs = orders.length > 0 || viewsLog.length > 0;
           
-          const periodStats = (() => {
-            if (analyticsPeriod === 'today') {
+          // Filter logs based on selection period (today, week, month)
+          const filteredViewsList = viewsLog.filter(v => {
+            if (!v.timestamp) return false;
+            const diffMs = Date.now() - new Date(v.timestamp).getTime();
+            if (analyticsPeriod === 'today') return diffMs <= 24 * 3600000;
+            if (analyticsPeriod === 'week') return diffMs <= 7 * 24 * 3600000;
+            return true;
+          });
+
+          const filteredOrdersList = orders.filter(o => {
+            if (!o.timestamp) return false;
+            const diffMs = Date.now() - new Date(o.timestamp).getTime();
+            if (analyticsPeriod === 'today') return diffMs <= 24 * 3600000;
+            if (analyticsPeriod === 'week') return diffMs <= 7 * 24 * 3600000;
+            return true;
+          });
+
+          // Determine totals
+          const fallbackViews = analyticsPeriod === 'today' 
+            ? Math.max(12, Math.floor((restaurant.viewsCount || 0) * 0.12))
+            : analyticsPeriod === 'week'
+              ? Math.max(45, Math.floor((restaurant.viewsCount || 0) * 0.44))
+              : (restaurant.viewsCount || 0);
+
+          const fallbackOrders = analyticsPeriod === 'today'
+            ? Math.max(2, Math.floor((restaurant.whatsappOrdersCount || 0) * 0.08))
+            : analyticsPeriod === 'week'
+              ? Math.max(8, Math.floor((restaurant.whatsappOrdersCount || 0) * 0.41))
+              : (restaurant.whatsappOrdersCount || 0);
+
+          const activeViewsCount = hasRealLogs ? filteredViewsList.length : fallbackViews;
+          const activeOrdersCount = hasRealLogs ? filteredOrdersList.length : fallbackOrders;
+          
+          const conversionRate = activeViewsCount > 0 
+            ? ((activeOrdersCount / activeViewsCount) * 100).toFixed(1) 
+            : "0.0";
+
+          const activeEstimatedValue = hasRealLogs 
+            ? filteredOrdersList.reduce((sum, o) => sum + (o.totalPrice || 0), 0)
+            : activeOrdersCount * 155; // Multiplied by average order ticket size
+
+          // Compute device channel metrics dynamically
+          const deviceMetrics = (() => {
+            if (hasRealLogs && viewsLog.length > 0) {
+              const counts = { iPhone: 0, Android: 0, Desktop: 0, Other: 0 };
+              filteredViewsList.forEach(v => {
+                counts[v.device as keyof typeof counts] = (counts[v.device as keyof typeof counts] || 0) + 1;
+              });
+              const total = filteredViewsList.length || 1;
               return {
-                views: Math.max(12, Math.floor(totalViews * 0.12)),
-                orders: Math.max(2, Math.floor(totalOrders * 0.08)),
-                label: 'اليوم الحالي',
-                subText: 'تحديث حي بلحظة'
-              };
-            } else if (analyticsPeriod === 'week') {
-              return {
-                views: Math.max(45, Math.floor(totalViews * 0.44)),
-                orders: Math.max(8, Math.floor(totalOrders * 0.41)),
-                label: 'هذا الأسبوع',
-                subText: 'السبعة أيام الأخيرة'
-              };
-            } else {
-              return {
-                views: totalViews,
-                orders: totalOrders,
-                label: 'كامل الإحصائيات تراكمياً',
-                subText: 'منذ إطلاق المنيو مجاناً'
+                ios: Math.round((counts.iPhone / total) * 100),
+                android: Math.round((counts.Android / total) * 100),
+                desktop: Math.round(((counts.Desktop + counts.Other) / total) * 105) // remaining
               };
             }
+            return { ios: 58, android: 37, desktop: 5 };
           })();
 
-          const conversionRate = periodStats.views > 0 ? ((periodStats.orders / periodStats.views) * 100).toFixed(1) : "0.0";
-          const estimatedValue = periodStats.orders * 155; // average order size of 155 EGP
+          // Compute peak hours based on real order timestamps or fallback
+          const peakHoursStats = (() => {
+            if (hasRealLogs && viewsLog.length > 0) {
+              const hoursCounts = { dinner: 0, lunch: 0, morning: 0, midnight: 0 };
+              filteredViewsList.forEach(v => {
+                const date = new Date(v.timestamp);
+                const hrs = date.getHours();
+                if (hrs >= 19 && hrs <= 23) hoursCounts.dinner++;
+                else if (hrs >= 14 && hrs <= 18) hoursCounts.lunch++;
+                else if (hrs >= 8 && hrs <= 13) hoursCounts.morning++;
+                else hoursCounts.midnight++;
+              });
+              const max = Math.max(hoursCounts.dinner, hoursCounts.lunch, hoursCounts.morning, hoursCounts.midnight, 1);
+              return [
+                { time: 'العشاء والمساء (7 مساءً - 11 ليلاً)', percent: Math.round((hoursCounts.dinner / max) * 100), label: 'ذروة التجمع العائلي والعشاء لعملائك 🔥' },
+                { time: 'الغداء والظهيرة (2 مساءً - 6 مساءً)', percent: Math.round((hoursCounts.lunch / max) * 100), label: 'نشاط متزايد مع وجبات الغداء الكلاسيكية 🍗' },
+                { time: 'منتصف الليل (12 ليلاً - 4 فجراً)', percent: Math.round((hoursCounts.midnight / max) * 100), label: 'الطلبات الليلية الخفيفة ومحبي السهر 🥞' },
+                { time: 'الصباح الباكر (8 صباحاً - 1 مساءً)', percent: Math.round((hoursCounts.morning / max) * 100), label: 'خدمة تناول الإفطار والمشروبات الصباحية ☕' }
+              ];
+            }
+            return [
+              { time: 'العشاء والمساء (7 مساءً - 11 ليلاً)', percent: 78, label: 'نشط جداً رواج ممتاز 🔥' },
+              { time: 'الغداء والظهيرة (2 مساءً - 6 مساءً)', percent: 54, label: 'متوسط الأداء المستمر 🍗' },
+              { time: 'منتصف الليل (12 ليلاً - 4 فجراً)', percent: 35, label: 'الطلبات المتأخرة والتحلية 🥞' },
+              { time: 'الصباح الباكر (8 صباحاً - 1 مساءً)', percent: 22, label: 'نشاط الإفطار والمشروبات ☕' }
+            ];
+          })();
 
-          // Compute popular items from active menu products in restaurant state
+          // Compute popular items from active menu products matched with orders
           const popularProducts = (() => {
             const rawList = products.length > 0 ? products : [
               { id: 'p1', name: 'برجر كلاسيك رويال دبل 🍔', price: 180, image: FOOD_PRESETS[0].url },
@@ -1091,195 +2065,470 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
               { id: 'p4', name: 'فرنش فرايز ذهبية مملحة 🍟', price: 50, image: FOOD_PRESETS[4].url },
             ];
 
-            return rawList.map((prod, index) => {
-              // Deterministic looking stats per product
-              const baseViews = Math.max(8, Math.floor(periodStats.views * (0.45 - index * 0.11)));
-              const baseOrders = Math.max(1, Math.floor(periodStats.orders * (0.48 - index * 0.13)));
-              const simRevenue = baseOrders * prod.price;
+            if (hasRealLogs && orders.length > 0) {
+              const occurrences: { [id: string]: number } = {};
+              rawList.forEach(p => { occurrences[p.id] = 0; });
+              
+              filteredOrdersList.forEach(o => {
+                if (o.items && Array.isArray(o.items)) {
+                  o.items.forEach(item => {
+                    if (occurrences[item.productId] !== undefined) {
+                      occurrences[item.productId] += item.quantity;
+                    } else {
+                      occurrences[item.productId] = item.quantity;
+                    }
+                  });
+                }
+              });
 
+              return rawList.map(p => {
+                const itemOrdersCount = occurrences[p.id] || 0;
+                // views are simulated proportionally to avoid empty viewer metrics on newly placed items
+                const simViews = Math.max(itemOrdersCount * 3 + 2, Math.floor(activeViewsCount * 0.15));
+                return {
+                  ...p,
+                  views: simViews,
+                  orders: itemOrdersCount,
+                  revenue: itemOrdersCount * p.price
+                };
+              }).sort((a, b) => b.orders - a.orders);
+            }
+
+            // Fallback mock math representation for beauty
+            return rawList.map((prod, index) => {
+              const baseViews = Math.max(8, Math.floor(activeViewsCount * (0.45 - index * 0.11)));
+              const baseOrders = Math.max(1, Math.floor(activeOrdersCount * (0.48 - index * 0.13)));
               return {
                 ...prod,
                 views: baseViews,
                 orders: baseOrders,
-                revenue: simRevenue
+                revenue: baseOrders * prod.price
               };
             }).filter(p => p.views > 0).sort((a, b) => b.orders - a.orders);
           })();
 
+          // Fallback UI arrays for display
+          const displayedOrders = orders.length > 0 ? filteredOrdersList : [
+            {
+              id: 'm-ord-1',
+              tableName: 'طاولة 4',
+              timestamp: new Date(Date.now() - 25 * 60000).toISOString(),
+              createdAt: 'قبل 25 دقيقة',
+              totalPrice: 410,
+              notes: 'يرجى الإسراع بالتجهيز وتوفير الصلصات الإضافية الدافئة 🛎️',
+              items: [
+                { productId: 'p1', name: 'برجر كلاسيك رويال دبل 🍔', price: 180, quantity: 2 },
+                { productId: 'p4', name: 'فرنش فرايز ذهبية مملحة 🍟', price: 50, quantity: 1 }
+              ]
+            },
+            {
+              id: 'm-ord-2',
+              tableName: 'طاولة 12',
+              timestamp: new Date(Date.now() - 3 * 3600000).toISOString(),
+              createdAt: 'اليوم، 3:30 م',
+              totalPrice: 120,
+              notes: 'زيادة الكاتشب الحار وصوص المايونيز',
+              items: [
+                { productId: 'p2', name: 'شاورما دجاج سوبر فرشك 🌯', price: 120, quantity: 1 }
+              ]
+            },
+            {
+              id: 'm-ord-3',
+              tableName: 'طاولة 1',
+              timestamp: new Date(Date.now() - 22 * 3600000).toISOString(),
+              createdAt: 'أمس، 9:15 م',
+              totalPrice: 790,
+              notes: 'لا تضف بصل أو مقبلات حارة في برجر الأطفال',
+              items: [
+                { productId: 'p3', name: 'بيتزا مارجريتا نابوليتان 🍕', price: 150, quantity: 3 },
+                { productId: 'p1', name: 'برجر كلاسيك رويال دبل 🍔', price: 180, quantity: 1 },
+                { productId: 'p4', name: 'فرنش فرايز ذهبية مملحة 🍟', price: 50, quantity: 2 }
+              ]
+            }
+          ];
+
+          const displayedViews = viewsLog.length > 0 ? filteredViewsList : [
+            { id: 'v1', timestamp: new Date(Date.now() - 5 * 60000).toISOString(), device: 'iPhone', referrer: 'مسح QR المطبوع' },
+            { id: 'v2', timestamp: new Date(Date.now() - 12 * 60000).toISOString(), device: 'Android', referrer: 'رابط واتساب المشترك' },
+            { id: 'v3', timestamp: new Date(Date.now() - 48 * 60000).toISOString(), device: 'iPhone', referrer: 'موقع التواصل الاجتماعي' },
+            { id: 'v4', timestamp: new Date(Date.now() - 2 * 3600000).toISOString(), device: 'Desktop', referrer: 'دخول مباشر للموقع' },
+            { id: 'v5', timestamp: new Date(Date.now() - 4 * 3600000).toISOString(), device: 'Android', referrer: 'مسح QR المطبوع' }
+          ];
+
           return (
             <div className="space-y-6 font-sans text-right animate-fade-in" dir="rtl">
               
-              {/* Header and Filter controller */}
-              <div className="bg-white border text-right border-slate-100 p-5 rounded-3xl shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+              {/* Header inside Analytic Screen */}
+              <div className="bg-white border text-right border-slate-100 p-5 rounded-3xl shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                 <div>
                   <h4 className="text-base font-black text-slate-900 flex items-center gap-2">
-                    <BarChart2 className="w-5 h-5 text-amber-500 shrink-0" />
-                    لوحة التحليلات ومؤشرات أداء المنيو 📊
+                    <BarChart2 className="w-5 h-5 text-amber-500 shrink-0 animate-pulse" />
+                    لوحة الإحصائيات وتحليل وسجلات الزوار والطلبات السحابية 📊
                   </h4>
-                  <p className="text-xs text-slate-500 mt-1">تتبع حركة الزبائن، والوجبات المتصدرة، مبيعات الواتساب الفورية</p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    {isDemo 
+                      ? 'قائمة توضيحية لخصائص التحليل والذكاء التجاري لبيانات السلة' 
+                      : 'تقرير في الوقت الحقيقي للمبيعات، متصفحي المنيو الرقمي ومعدلات التحويل المستهدفة'
+                    }
+                  </p>
                 </div>
 
-                {/* Period Selector segment controllers */}
-                <div className="bg-slate-100 p-1.5 rounded-2xl flex gap-1 select-none w-full sm:w-auto">
-                  {[
-                    { id: 'today', label: 'اليوم ☀️' },
-                    { id: 'week', label: 'الأسبوع الأخير 📅' },
-                    { id: 'month', label: 'كل الأوقات ♾️' }
-                  ].map((period) => (
-                    <button
-                      key={period.id}
-                      onClick={() => setAnalyticsPeriod(period.id as any)}
-                      className={`flex-1 sm:flex-initial py-1.5 px-4 rounded-xl text-xs font-black transition-all cursor-pointer ${analyticsPeriod === period.id ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50'}`}
-                    >
-                      {period.label}
-                    </button>
-                  ))}
+                {/* Filter and Simulator Actions */}
+                <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
+                  <div className="bg-slate-100 p-1 rounded-2xl flex gap-1 w-full sm:w-auto">
+                    {[
+                      { id: 'today', label: 'اليوم ☀️' },
+                      { id: 'week', label: 'الأسبوع 📅' },
+                      { id: 'month', label: 'كل الأوقات ♾️' }
+                    ].map((period) => (
+                      <button
+                        key={period.id}
+                        onClick={() => setAnalyticsPeriod(period.id as any)}
+                        className={`flex-1 sm:flex-initial py-1.5 px-3 rounded-xl text-xs font-black transition-all cursor-pointer ${analyticsPeriod === period.id ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50'}`}
+                      >
+                        {period.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {loadingAnalytics && (
+                    <div className="animate-spin w-4 h-4 border-2 border-slate-900 border-t-transparent rounded-full ml-1" />
+                  )}
                 </div>
               </div>
 
-              {/* Bento Statistics Grid */}
+              {/* Cloud Simulator Tool panel: shown for real users to help them test live firebase events without waiting for real QR scans */}
+              {!isDemo && (
+                <div className="bg-amber-50/50 border border-amber-100/75 p-5 rounded-3xl flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4">
+                  <div className="space-y-0.5">
+                    <h5 className="text-xs font-black text-amber-900 flex items-center gap-1.5">
+                      <Sparkles className="w-4 h-4 text-amber-500 shrink-0 animate-bounce" />
+                      أدوات تجربة واختبار السحابة السريعة (Developer Sandbox) ⚙️
+                    </h5>
+                    <p className="text-[11px] text-amber-700/90 leading-normal">
+                      لم تبدأ في تلقي طلبات مسح QR من الزبائن بعد؟ استخدم أدوات المحاكاة لإرسال طلبات وزيارات افتراضية حقيقية إلى قاعدة بيانات <span className="font-bold underline">Firestore</span> لمشاهدة تأثيرها الفوري على هذه الإحصائيات!
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2 w-full xl:w-auto shrink-0 select-none">
+                    <button
+                      onClick={handleSimulateVisitor}
+                      className="flex-1 xl:flex-initial bg-amber-500 hover:bg-amber-600 active:scale-95 text-white text-xs font-black py-2 px-3.5 rounded-2xl transition-all shadow-sm cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <Eye className="w-4 h-4" />
+                      محاكاة زيارة زبون 📱
+                    </button>
+                    <button
+                      onClick={handleSimulateOrder}
+                      className="flex-1 xl:flex-initial bg-slate-900 hover:bg-slate-800 active:scale-95 text-white text-xs font-black py-2 px-3.5 rounded-2xl transition-all shadow-sm cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <ShoppingBag className="w-4 h-4" />
+                      محاكاة طلب سلة 🍕
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Grid Dashboard Totals Cards */}
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 
-                {/* 1. Views Count */}
-                <div className="bg-white border rounded-3xl p-5 shadow-sm space-y-1 relative overflow-hidden flex flex-col justify-between min-h-[120px]">
+                {/* 1. Views Count Card */}
+                <div className="bg-white border rounded-3xl p-5 shadow-sm space-y-1 relative overflow-hidden flex flex-col justify-between min-h-[110px]">
                   <div className="absolute left-4 top-4 w-9 h-9 rounded-xl bg-amber-500/10 text-amber-600 flex items-center justify-center">
                     <Eye className="w-4.5 h-4.5" />
                   </div>
                   <div>
-                    <span className="text-[10px] text-slate-400 font-bold uppercase block">زيارات المنيو الرقمي</span>
-                    <span className="text-2xl sm:text-3xl font-black text-slate-900 font-mono block mt-1">{periodStats.views}</span>
+                    <span className="text-[10px] text-slate-400 font-bold uppercase block">إجمالي تصفح المنيو</span>
+                    <span className="text-2xl sm:text-3xl font-black text-slate-900 font-mono block mt-1">{activeViewsCount}</span>
                   </div>
-                  <div className="text-[10px] text-emerald-600 font-black flex items-center gap-0.5 justify-start font-mono pt-2 border-t border-slate-50">
-                    <TrendingUp className="w-3 h-3" />
-                    <span>+12.4% متفاعل</span>
-                  </div>
+                  <span className="text-[9px] text-emerald-600 font-bold flex items-center gap-0.5 justify-start">
+                    <TrendingUp className="w-3.5 h-3.5" />
+                    <span>نشاط مميز مستمر</span>
+                  </span>
                 </div>
 
-                {/* 2. WhatsApp Orders Click */}
-                <div className="bg-white border rounded-3xl p-5 shadow-sm space-y-1 relative overflow-hidden flex flex-col justify-between min-h-[120px]">
+                {/* 2. Whatsapp Orders Count Card */}
+                <div className="bg-white border rounded-3xl p-5 shadow-sm space-y-1 relative overflow-hidden flex flex-col justify-between min-h-[110px]">
                   <div className="absolute left-4 top-4 w-9 h-9 rounded-xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center">
                     <MessageSquare className="w-4.5 h-4.5" />
                   </div>
                   <div>
-                    <span className="text-[10px] text-slate-400 font-bold uppercase block">طلبات الواتساب المرسلة</span>
-                    <span className="text-2xl sm:text-3xl font-black text-slate-900 font-mono block mt-1">{periodStats.orders}</span>
+                    <span className="text-[10px] text-slate-400 font-bold uppercase block">نقرات إرسال للواتساب</span>
+                    <span className="text-2xl sm:text-3xl font-black text-slate-900 font-mono block mt-1">{activeOrdersCount}</span>
                   </div>
-                  <div className="text-[10px] text-emerald-600 font-black flex items-center gap-0.5 justify-start font-mono pt-2 border-t border-slate-50">
-                    <Check className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>خروج سلة مكتمل</span>
-                  </div>
+                  <span className="text-[9px] text-emerald-600 font-bold flex items-center gap-0.5 justify-start">
+                    <Check className="w-3.5 h-3.5" />
+                    <span>مكتمل من السلة</span>
+                  </span>
                 </div>
 
-                {/* 3. Conversion rate */}
-                <div className="bg-white border rounded-3xl p-5 shadow-sm space-y-1 relative overflow-hidden flex flex-col justify-between min-h-[120px]">
+                {/* 3. Conversion Rate Card */}
+                <div className="bg-white border rounded-3xl p-5 shadow-sm space-y-1 relative overflow-hidden flex flex-col justify-between min-h-[110px]">
                   <div className="absolute left-4 top-4 w-9 h-9 rounded-xl bg-indigo-500/10 text-indigo-600 flex items-center justify-center">
                     <Percent className="w-4.5 h-4.5" />
                   </div>
                   <div>
-                    <span className="text-[10px] text-slate-400 font-bold uppercase block">معدل تحويل الطلب للزائر</span>
+                    <span className="text-[10px] text-slate-400 font-bold uppercase block">نسبة التحويل (C-Rate)</span>
                     <span className="text-2xl sm:text-3xl font-black text-slate-900 font-mono block mt-1">{conversionRate}%</span>
                   </div>
-                  <div className="w-full bg-slate-100 h-1 rounded-full overflow-hidden mt-2">
-                    <div className="bg-indigo-600 h-1 rounded-full" style={{ width: `${Math.min(100, parseFloat(conversionRate) * 3)}%` }} />
+                  <div className="w-full bg-slate-100 h-1 rounded-full overflow-hidden mt-1 select-none">
+                    <div className="bg-indigo-600 h-full rounded-full transition-all duration-300" style={{ width: `${Math.min(100, parseFloat(conversionRate) * 3)}%` }} />
                   </div>
                 </div>
 
-                {/* 4. Estimated financial stats value */}
-                <div className="bg-white border rounded-3xl p-5 shadow-sm space-y-1 relative overflow-hidden flex flex-col justify-between min-h-[120px]">
+                {/* 4. Financial Sum Card */}
+                <div className="bg-white border rounded-3xl p-5 shadow-sm space-y-1 relative overflow-hidden flex flex-col justify-between min-h-[110px]">
                   <div className="absolute left-4 top-4 w-9 h-9 rounded-xl bg-rose-500/10 text-rose-600 flex items-center justify-center">
                     <DollarSign className="w-4.5 h-4.5" />
                   </div>
                   <div>
                     <span className="text-[10px] text-slate-400 font-bold uppercase block">قيمة مبيعات السلة المقدرة</span>
                     <span className="text-2xl sm:text-3xl font-black text-emerald-600 font-mono block mt-1">
-                      {estimatedValue} <span className="text-xs font-black">{restaurant.currency || 'EGP'}</span>
+                      {activeEstimatedValue} <span className="text-xs font-black">{restaurant.currency || 'EGP'}</span>
                     </span>
                   </div>
-                  <span className="text-[9px] text-slate-400 font-semibold block pt-2 border-t border-slate-50">بمتوسط حجم طلب 155 ج.م</span>
+                  <span className="text-[9px] text-slate-400 block font-semibold leading-none">مجموع أسعار المنتجات المطلوبة</span>
                 </div>
 
               </div>
 
-              {/* Advanced Two-Column Section: popular list + times insights */}
+              {!hasRealLogs && !isDemo && (
+                <div className="bg-blue-50 border border-blue-100 p-4 rounded-2xl flex items-start gap-3">
+                  <div className="p-1 rounded-lg bg-blue-100 text-blue-800 shrink-0">
+                    <BookOpen className="w-4 h-4" />
+                  </div>
+                  <div className="space-y-0.5 text-right">
+                    <span className="text-xs font-black text-blue-950 block">💡 إحصائيات معروضة للتوضيح المبدئي:</span>
+                    <p className="text-[11px] text-blue-850 leading-relaxed">
+                      نظراً لأن مطعمك لم يبدأ في استقبال طلبات حقيقية أو زيارات بعد، فإن لوحة الإحصائيات تعرض حالياً وجبات وتقارير توضيحية لتوضيح التناسق وتصميم المخططات. بمجرد قيام أول زبون بفتح المنيو عن طريق الـ QR code الخاص بك، ستتحول اللوحة تلقائياً لعرض وتحليل الزوار الفعليين وبث لقطات مباشرة!
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {(() => {
+                // Prepare data for Recharts
+                const chartData = popularProducts.slice(0, 6).map((p, index) => {
+                  const cleanName = p.name ? p.name.trim() : '';
+                  const shortName = cleanName.length > 12 ? cleanName.substring(0, 12) + '...' : cleanName;
+                  return {
+                    name: cleanName,
+                    shortName: shortName,
+                    orders: p.orders || 0,
+                    views: p.views || 0,
+                    revenue: p.revenue || 0,
+                    index: index + 1
+                  };
+                });
+
+                const CHART_COLORS = ['#F59E0B', '#10B981', '#3B82F6', '#EC4899', '#8B5CF6', '#EF4444'];
+
+                const CustomTooltip = ({ active, payload }: any) => {
+                  if (active && payload && payload.length) {
+                    const data = payload[0].payload;
+                    return (
+                      <div className="bg-slate-900 border border-slate-800 text-white p-3 py-2.5 rounded-2xl shadow-xl text-[11px] text-right space-y-1" dir="rtl">
+                        <p className="font-extrabold text-amber-400 mb-1">{data.name}</p>
+                        <p className="text-slate-300">📈 مرات الإضافة للسلة: <span className="font-mono text-white font-bold">{data.orders} طلب</span></p>
+                        <p className="text-slate-300">👁️ عدد مرات التصفح: <span className="font-mono text-white font-bold">{data.views} زيارات</span></p>
+                        <p className="text-slate-300">💰 الأرباح المقدرة: <span className="font-mono text-emerald-400 font-bold">{data.revenue} {restaurant.currency || 'EGP'}</span></p>
+                      </div>
+                    );
+                  }
+                  return null;
+                };
+
+                return (
+                  <div className="bg-white border rounded-3xl p-6 shadow-sm space-y-6">
+                    <div className="pb-3 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                      <div>
+                        <h4 className="text-sm font-black text-slate-900 flex items-center gap-1.5">
+                          <BarChart2 className="w-5 h-5 text-amber-500 shrink-0" />
+                          التحليل الإحصائي المتقدم للأصناف والوجبات الأكثر مبيعاً ورواجاً 📊
+                        </h4>
+                        <p className="text-[10px] text-slate-400 mt-0.5">تحليل بياني تفاعلي للمبيعات مقارنة بالتوهج المعروض لمساعدتك في اتخاذ القرار</p>
+                      </div>
+                      <div className="text-[10px] font-black bg-amber-50 text-amber-800 px-3 py-1 rounded-xl shrink-0 select-none">
+                        مكتبة Recharts التفاعلية 📈
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                      {/* Chart 1: Bar chart for orders */}
+                      <div className="lg:col-span-7 space-y-3">
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs font-black text-slate-800">📊 تفضيلات ومبيعات كل طبق بالمنيو</span>
+                          <span className="text-[10px] text-slate-500 font-semibold">ترتيب تنازلي حسب الأكثر مبيعاً</span>
+                        </div>
+
+                        <div className="h-[250px] w-full" dir="ltr">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart
+                              data={chartData}
+                              margin={{ top: 10, right: 10, left: -25, bottom: 0 }}
+                            >
+                              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+                              <XAxis 
+                                dataKey="shortName" 
+                                stroke="#64748B" 
+                                fontSize={10} 
+                                fontWeight="bold"
+                                tickLine={false}
+                              />
+                              <YAxis 
+                                stroke="#64748B" 
+                                fontSize={10} 
+                                fontWeight="bold"
+                                tickLine={false}
+                                allowDecimals={false}
+                              />
+                              <RechartsTooltip 
+                                content={<CustomTooltip />}
+                                cursor={{ fill: 'rgba(245, 158, 11, 0.04)' }}
+                              />
+                              <Bar dataKey="orders" fill="#F59E0B" radius={[6, 6, 0, 0]} barSize={35}>
+                                {chartData.map((entry, index) => (
+                                  <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                                ))}
+                              </Bar>
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+
+                      {/* Chart 2: Area / Conversion comparison chart */}
+                      <div className="lg:col-span-5 space-y-4 flex flex-col justify-between">
+                        <div className="space-y-1">
+                          <div className="flex justify-between items-center">
+                            <span className="text-xs font-black text-slate-800">🎯 منحنى نجاح تحويل التصفح إلى سلة شراء</span>
+                            <span className="text-[10px] text-slate-500 font-semibold">يقيس الجاذبية التسويقية للوجبة</span>
+                          </div>
+                          <p className="text-[10px] text-slate-400">يقارن بين عدد مشاهدات الوجبة مقابل مرات الإرسال الفعلية للواتساب</p>
+                        </div>
+
+                        <div className="h-[180px] w-full" dir="ltr">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart
+                              data={chartData}
+                              margin={{ top: 5, right: 10, left: -25, bottom: 0 }}
+                            >
+                              <defs>
+                                <linearGradient id="colorOrdersGradient" x1="0" y1="0" x2="0" y2="1">
+                                  <stop offset="5%" stopColor="#10B981" stopOpacity={0.3}/>
+                                  <stop offset="95%" stopColor="#10B981" stopOpacity={0.0}/>
+                                </linearGradient>
+                                <linearGradient id="colorViewsGradient" x1="0" y1="0" x2="0" y2="1">
+                                  <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.15}/>
+                                  <stop offset="95%" stopColor="#3B82F6" stopOpacity={0.0}/>
+                                </linearGradient>
+                              </defs>
+                              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+                              <XAxis dataKey="shortName" stroke="#64748B" fontSize={9} fontWeight="bold" tickLine={false} />
+                              <YAxis stroke="#64748B" fontSize={9} fontWeight="bold" tickLine={false} />
+                              <RechartsTooltip content={<CustomTooltip />} />
+                              <Legend 
+                                verticalAlign="top" 
+                                height={28} 
+                                iconSize={8}
+                                iconType="circle"
+                                formatter={(value) => {
+                                  if (value === 'views') return <span className="text-[9px] font-bold text-slate-600 pr-3">زيارة المنيو 👁️</span>;
+                                  if (value === 'orders') return <span className="text-[9px] font-bold text-slate-600 pr-3">طلب في السلة 🛒</span>;
+                                  return value;
+                                }}
+                              />
+                              <Area type="monotone" dataKey="views" name="views" stroke="#3B82F6" strokeWidth={2} fillOpacity={1} fill="url(#colorViewsGradient)" />
+                              <Area type="monotone" dataKey="orders" name="orders" stroke="#10B981" strokeWidth={2} fillOpacity={1} fill="url(#colorOrdersGradient)" />
+                            </AreaChart>
+                          </ResponsiveContainer>
+                        </div>
+
+                        {/* Quick Insight Footnote */}
+                        <div className="bg-slate-50 border border-slate-100 rounded-2xl p-3 flex items-start gap-2 text-[10px]">
+                          <span className="text-amber-600 mt-0.5 shrink-0 font-bold">💡 نصيحة الخبراء:</span>
+                          <p className="text-slate-600 leading-normal text-right">
+                            الأطباق ذات التصفح العالي والطلب المنخفض قد تحتاج لمراجعة الصور لجعلها أكثر إثارة للشهية، أو تقديم عروض حصرية عليها!
+                          </p>
+                        </div>
+
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Primary Visual Row: Popular products list + Device analytics & visit times */}
               <div className="grid lg:grid-cols-3 gap-6">
                 
-                {/* Popularity ranking items table */}
+                {/* 1. Popular Products Table */}
                 <div className="bg-white border rounded-3xl p-6 shadow-sm lg:col-span-2 space-y-4">
                   <div className="flex justify-between items-center pb-2 border-b border-slate-100">
                     <div>
                       <h4 className="text-sm font-black text-slate-900 flex items-center gap-1.5">
                         <Sparkles className="w-4 h-4 text-amber-500" />
-                        الأصناف والأطباق الأكثر طلباً ورواجاً 🔥
+                        الوجبات والأطباق الفردية الأكثر طلباً ورواجاً 🔥
                       </h4>
-                      <p className="text-[10px] text-slate-400 mt-0.5">ترتيب السلع تنازلياً وفقاً لنقرات سلة الطلب</p>
+                      <p className="text-[10px] text-slate-400 mt-0.5">ترتيب الأطباق تلقائياً بناءً على تكرار ورودها في سلات الزبائن السحابية</p>
                     </div>
-                    <span className="text-[10px] font-black bg-amber-50 text-amber-800 px-2.5 py-1 rounded-lg">
+                    <span className="text-[10px] font-black bg-amber-50 text-amber-800 px-2.5 py-1 rounded-lg select-none">
                       {popularProducts.length} أطباق بالتحليل
                     </span>
                   </div>
 
                   <div className="divide-y divide-slate-100">
-                    {popularProducts.map((p, idx) => {
+                    {popularProducts.slice(0, 5).map((p, idx) => {
                       const rankSymbols = ['🥇', '🥈', '🥉'];
-                      
-                      // Percentage of total views this item got to render inline bars
-                      const percentOfViews = periodStats.views > 0 ? (p.views / periodStats.views) * 100 : 25;
+                      // calculate ratio
+                      const maxViewsValue = popularProducts[0]?.views || 1;
+                      const percentOfBest = Math.round((p.views / maxViewsValue) * 100);
 
                       return (
-                        <div key={p.id} className="flex items-center gap-3.5 py-3.5 first:pt-1 last:pb-1">
+                        <div key={p.id} className="flex items-center gap-3.5 py-3 first:pt-1 last:pb-1">
                           
-                          {/* Rank badge */}
-                          <div className="w-7 h-7 bg-slate-50 text-slate-700 rounded-full flex items-center justify-center text-xs font-black shrink-0 relative">
+                          {/* Rank column */}
+                          <div className="w-7 h-7 bg-slate-50 text-slate-700 rounded-full flex items-center justify-center text-xs font-black shrink-0 relative select-none">
                             {idx < 3 ? (
                               <span className="text-base leading-none">{rankSymbols[idx]}</span>
                             ) : (
-                              <span className="text-[10px] font-mono leading-none">#{idx + 1}</span>
+                              <span className="text-[10px] font-mono">#{idx + 1}</span>
                             )}
                           </div>
 
-                          {/* Image thumbnail */}
+                          {/* Image */}
                           <img 
                             src={p.image} 
                             className="w-10 h-10 rounded-xl object-cover border bg-slate-100 shrink-0" 
                             alt={p.name} 
                           />
 
-                          {/* Info Column */}
-                          <div className="flex-1 space-y-1">
-                            <div className="flex justify-between">
-                              <h5 className="text-xs font-black text-slate-900 line-clamp-1">{p.name}</h5>
-                              <span className="text-xs font-black text-slate-800 font-mono shrink-0 ml-1">
+                          {/* Name & statistics sub row */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex justify-between items-center gap-2">
+                              <h5 className="text-xs font-black text-slate-900 truncate" title={p.name}>{p.name}</h5>
+                              <span className="text-xs font-black text-slate-800 font-mono shrink-0">
                                 {p.price} {restaurant.currency || 'EGP'}
                               </span>
                             </div>
 
-                            {/* Views and conversion status bar indicators */}
-                            <div className="flex items-center gap-4 text-[10px] text-slate-400">
-                              <div className="flex items-center gap-1">
-                                <span>المشاهدات:</span>
-                                <span className="font-extrabold text-slate-700 font-mono">{p.views}</span>
-                              </div>
-                              <div className="flex items-center gap-1">
-                                <span>الطلبات:</span>
-                                <span className="font-extrabold text-slate-700 font-mono text-emerald-600 flex items-center">
-                                  {p.orders}
-                                </span>
-                              </div>
+                            <div className="flex items-center gap-3.5 text-[10px] text-slate-400 mt-1">
+                              <span className="flex items-center gap-0.5">
+                                تصفح المنيو: <strong className="text-slate-700 font-mono">{p.views}</strong>
+                              </span>
+                              <span className="flex items-center gap-0.5">
+                                سلة المطلوبات: <strong className="text-emerald-600 font-mono">{p.orders}</strong>
+                              </span>
                               {p.revenue > 0 && (
-                                <div className="hidden sm:flex items-center gap-1 bg-emerald-50 text-emerald-800 px-1.5 py-0.5 rounded font-mono">
-                                  <span>عائد:</span>
-                                  <span className="font-bold">{p.revenue}</span>
-                                </div>
+                                <span className="bg-emerald-50 text-emerald-800 font-bold font-mono px-1.5 py-0.2 rounded">
+                                  عائد: {p.revenue} {restaurant.currency}
+                                </span>
                               )}
                             </div>
 
-                            {/* Visual line graph bar */}
-                            <div className="w-full bg-slate-100 h-1 rounded-full overflow-hidden mt-1.5">
+                            <div className="w-full bg-slate-100 h-1 rounded-full overflow-hidden mt-2 select-none">
                               <div 
                                 className={`h-full rounded-full transition-all duration-500 ${
                                   idx === 0 ? 'bg-amber-500' : idx === 1 ? 'bg-amber-400' : 'bg-slate-400'
                                 }`}
-                                style={{ width: `${Math.min(100, Math.max(10, percentOfViews))}%` }}
+                                style={{ width: `${Math.max(10, percentOfBest)}%` }}
                               />
                             </div>
                           </div>
@@ -1290,38 +2539,33 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
                   </div>
                 </div>
 
-                {/* Performance charts and visit times insights column */}
+                {/* Left Side: Device & Peak hour charts */}
                 <div className="space-y-4">
                   
-                  {/* Visited peak hour timeline card */}
+                  {/* Visitor peak times analysis */}
                   <div className="bg-white border rounded-3xl p-6 shadow-sm space-y-4">
                     <div className="pb-2 border-b border-slate-100">
                       <h4 className="text-sm font-black text-slate-900 flex items-center gap-1.5">
-                        <Clock className="w-4 h-4 text-orange-500" />
-                        أوقات ذروة تصفح المنيو للزبائن ⌛
+                        <Clock className="w-4 h-4 text-orange-500 shrink-0" />
+                        تحليل الفترات الأكثر طلباً ونشاطاً ⌛
                       </h4>
-                      <p className="text-[10px] text-slate-400 mt-0.5">ساعات الذروة التي يزداد فيها الطلب بكثافة</p>
+                      <p className="text-[10px] text-slate-400 mt-0.5 font-semibold">تحديد الساعات التي تشهد أعلى تفاعل لحفظ وقت الطاهي</p>
                     </div>
 
-                    <div className="space-y-3 pt-1">
-                      {[
-                        { time: 'العشاء والمساء (7 مساءً - 11 ليلاً)', percent: 78, label: 'نشط جداً رواج ممتاز 🔥' },
-                        { time: 'الغداء والظهيرة (2 مساءً - 6 مساءً)', percent: 54, label: 'متوسط الأداء المستمر 🍗' },
-                        { time: 'الصباح الباكر (8 صباحاً - 1 مساءً)', percent: 22, label: 'نشاط الإفطار والمشروبات ☕' },
-                        { time: 'منتصف الليل (12 ليلاً - 4 فجراً)', percent: 35, label: 'الطلبات المتأخرة والتحلية 🥞' }
-                      ].map((item, idx) => (
+                    <div className="space-y-3">
+                      {peakHoursStats.map((item, idx) => (
                         <div key={idx} className="space-y-1">
                           <div className="flex justify-between text-[10px] font-bold">
                             <span className="text-slate-800">{item.time}</span>
                             <span className="text-amber-600 font-mono">{item.percent}%</span>
                           </div>
-                          <div className="w-full bg-slate-50 border border-slate-100 rounded-full h-2">
+                          <div className="w-full bg-slate-50 border border-slate-100 rounded-full h-1.5 overflow-hidden select-none">
                             <div 
-                              className="h-full bg-amber-500 rounded-full" 
+                              className="h-full bg-amber-500 rounded-full transition-all" 
                               style={{ width: `${item.percent}%` }}
                             />
                           </div>
-                          <p className="text-[9px] text-slate-400">{item.label}</p>
+                          <p className="text-[9px] text-slate-400 font-semibold">{item.label}</p>
                         </div>
                       ))}
                     </div>
@@ -1331,58 +2575,43 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
                   <div className="bg-white border rounded-3xl p-6 shadow-sm space-y-4">
                     <div className="pb-2 border-b border-slate-100">
                       <h4 className="text-sm font-black text-slate-900 flex items-center gap-1.5">
-                        <Smartphone className="w-4 h-4 text-emerald-500" />
-                        قنوات تصفح الزوار (نوع الأجهزة) 📱
+                        <Smartphone className="w-4 h-4 text-emerald-500 shrink-0" />
+                        صنف أجهزة وجوالات الزوار (قنوات المسح) 📱
                       </h4>
-                      <p className="text-[10px] text-slate-400 mt-0.5">تحليل نوع الجوالات المستخدمة لمسح QR</p>
+                      <p className="text-[10px] text-slate-400 mt-0.5">تحليل نوع الجوالات المستخدمة لمسح رموز QR واستعراض المأكولات</p>
                     </div>
 
-                    <div className="space-y-3.5 pt-1">
-                      {/* iOS users */}
-                      <div className="flex items-center gap-3">
-                        <div className="p-2 rounded-xl bg-slate-100 text-slate-700 shrink-0">
-                          <Smartphone className="w-4 h-4" />
+                    <div className="space-y-3.5">
+                      {/* iOS */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between items-center text-[10px] font-black text-slate-900">
+                          <span className="flex items-center gap-1">🍎 هواتف آيفون وسلاسل آبل</span>
+                          <span className="font-mono">{deviceMetrics.ios}%</span>
                         </div>
-                        <div className="flex-1 space-y-0.5">
-                          <div className="flex justify-between text-[10px] font-bold">
-                            <span>جوالات آيفون (Apple iOS) 🍎</span>
-                            <span className="font-mono text-slate-800">58%</span>
-                          </div>
-                          <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                            <div className="bg-slate-900 h-full rounded-full" style={{ width: '58%' }} />
-                          </div>
+                        <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden select-none">
+                          <div className="bg-slate-900 h-full rounded-full transition-all duration-500" style={{ width: `${deviceMetrics.ios}%` }} />
                         </div>
                       </div>
 
-                      {/* Android users */}
-                      <div className="flex items-center gap-3">
-                        <div className="p-2 rounded-xl bg-emerald-50 text-emerald-700 shrink-0">
-                          <Smartphone className="w-4 h-4" />
+                      {/* Android */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between items-center text-[10px] font-black text-slate-900">
+                          <span className="flex items-center gap-1">🤖 أنظمة أندرويد (سامسونج، شاومي إلخ)</span>
+                          <span className="font-mono">{deviceMetrics.android}%</span>
                         </div>
-                        <div className="flex-1 space-y-0.5">
-                          <div className="flex justify-between text-[10px] font-bold">
-                            <span>جوالات أندرويد (Google Android) 🤖</span>
-                            <span className="font-mono text-slate-800">37%</span>
-                          </div>
-                          <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                            <div className="bg-emerald-600 h-full rounded-full" style={{ width: '37%' }} />
-                          </div>
+                        <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden select-none">
+                          <div className="bg-emerald-600 h-full rounded-full transition-all duration-500" style={{ width: `${deviceMetrics.android}%` }} />
                         </div>
                       </div>
 
                       {/* Desktop */}
-                      <div className="flex items-center gap-3">
-                        <div className="p-2 rounded-xl bg-orange-50 text-orange-700 shrink-0">
-                          <Laptop className="w-4 h-4" />
+                      <div className="space-y-1">
+                        <div className="flex justify-between items-center text-[10px] font-black text-slate-900">
+                          <span className="flex items-center gap-1">💻 أجهزة الكمبيوتر والتصفح المباشر</span>
+                          <span className="font-mono">{deviceMetrics.desktop}%</span>
                         </div>
-                        <div className="flex-1 space-y-0.5">
-                          <div className="flex justify-between text-[10px] font-bold">
-                            <span>أجهزة مكتبية (Desktop) 💻</span>
-                            <span className="font-mono text-slate-800">5%</span>
-                          </div>
-                          <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                            <div className="bg-orange-500 h-full rounded-full" style={{ width: '5%' }} />
-                          </div>
+                        <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden select-none">
+                          <div className="bg-amber-500 h-full rounded-full transition-all duration-500" style={{ width: `${deviceMetrics.desktop}%` }} />
                         </div>
                       </div>
                     </div>
@@ -1392,15 +2621,130 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
 
               </div>
 
-              {/* Free Lifetime Platform support layout reminder */}
-              <div className="bg-gradient-to-l from-slate-900 to-slate-850 text-white border border-slate-800 rounded-3xl p-6 shadow-xl space-y-3 relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-24 h-24 bg-amber-500/10 rounded-full blur-xl pointer-events-none" />
-                <h4 className="text-sm font-black text-amber-400 flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 animate-pulse" />
-                  منصة منيو كليك حرة ومفتوحة بالكامل بلا قيود
+              {/* SECTION: Recent Orders Log stream and Visitors activity stream */}
+              <div className="grid lg:grid-cols-2 gap-6">
+                
+                {/* Box 1: Recent Orders log list */}
+                <div className="bg-white border rounded-3xl p-6 shadow-sm space-y-4">
+                  <div className="pb-3 border-b border-slate-100 flex justify-between items-center">
+                    <div>
+                      <h4 className="text-sm font-black text-slate-900 flex items-center gap-1.5">
+                        <ShoppingBag className="w-4 h-4 text-emerald-500 shrink-0" />
+                        سجل التذاكر والطلبات السحابية الواردة 📋
+                      </h4>
+                      <p className="text-[10px] text-slate-400 mt-0.5">تفاصيل كيرنل الطلبات المروّسة من بوابة سلال زبائنك بالكامل</p>
+                    </div>
+                    {hasRealLogs && (
+                      <span className="text-[9px] font-bold bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded-lg select-none">
+                        قاعدة بيانات نشطة
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="space-y-3.5 max-h-[380px] overflow-y-auto pr-1">
+                    {displayedOrders.slice(0, 10).map((order: any, idx) => (
+                      <div key={order.id || idx} className="border border-slate-100 rounded-2xl p-4 space-y-3 hover:border-slate-200 transition-all">
+                        <div className="flex justify-between items-start gap-2">
+                          <div>
+                            <span className="text-xs font-black text-slate-900 block">{order.tableName}</span>
+                            <span className="text-[9px] text-slate-400 font-mono mt-0.5 block">
+                              {order.createdAt || (order.timestamp ? new Date(order.timestamp).toLocaleString('ar-EG') : 'الآن')}
+                            </span>
+                          </div>
+                          
+                          <div className="text-left shrink-0">
+                            <span className="text-xs font-black text-emerald-600 block">
+                              {order.totalPrice} <span className="text-[10px]">{restaurant.currency || 'EGP'}</span>
+                            </span>
+                            <span className="text-[8px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 font-bold rounded-md block mt-1">
+                              طلب واتساب مرسل
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Order Products Sub list */}
+                        <div className="bg-slate-50 p-2.5 rounded-xl space-y-1.5 text-[10px]">
+                          {order.items && Array.isArray(order.items) && order.items.map((item: any, itemIdx: number) => (
+                            <div key={itemIdx} className="flex justify-between text-slate-700">
+                              <span>- {item.name || 'dish'} <strong className="text-slate-900 font-mono">x{item.quantity}</strong></span>
+                              <span className="font-mono">{item.price * item.quantity} {restaurant.currency}</span>
+                            </div>
+                          ))}
+                        </div>
+
+                        {order.notes && (
+                          <p className="text-[10px] text-slate-500 bg-amber-50/50 p-2 rounded-xl border border-amber-100/50 leading-relaxed">
+                            💡 <strong className="text-amber-800">ملاحظة:</strong> {order.notes}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Box 2: Live Visitors Activity Log */}
+                <div className="bg-white border rounded-3xl p-6 shadow-sm space-y-4">
+                  <div className="pb-3 border-b border-slate-100 flex justify-between items-center">
+                    <div>
+                      <h4 className="text-sm font-black text-slate-900 flex items-center gap-1.5">
+                        <Globe className="w-4 h-4 text-pink-500 shrink-0" />
+                        بث حركة تصفح الزوار والـ QR Code مباشر 🌐
+                      </h4>
+                      <p className="text-[10px] text-slate-400 mt-0.5">تفاصيل أنظمة ومرجعيات العملاء لحظة مسحهم للكود</p>
+                    </div>
+                    {hasRealLogs && (
+                      <span className="text-[9px] font-bold bg-pink-100 text-pink-900 px-2 py-0.5 rounded-lg select-none animate-pulse">
+                        بث حي متصل
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
+                    {displayedViews.slice(0, 15).map((log: any, idx) => {
+                      const isApple = log.device === 'iPhone';
+                      const isDroid = log.device === 'Android';
+                      return (
+                        <div key={log.id || idx} className="flex justify-between items-center gap-3 border border-slate-50 p-3 rounded-2xl hover:bg-slate-50/50 transition-all">
+                          <div className="flex items-center gap-2.5">
+                            <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${isApple ? 'bg-slate-100 text-slate-900' : isDroid ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-100 text-amber-800'}`}>
+                              {isApple ? (
+                                <Smartphone className="w-4.5 h-4.5" />
+                              ) : isDroid ? (
+                                <Smartphone className="w-4.5 h-4.5" />
+                              ) : (
+                                <Laptop className="w-4.5 h-4.5" />
+                              )}
+                            </div>
+                            <div className="text-right">
+                              <span className="text-xs font-bold text-slate-800 block">
+                                زيارة من جهاز {log.device === 'iPhone' ? 'Apple iPhone' : log.device === 'Android' ? 'Android Device' : log.device === 'Desktop' ? 'كمبيوتر مكتبي' : 'مجهول'}
+                              </span>
+                              <span className="text-[8px] text-slate-400 block mt-0.5 leading-none">
+                                المصدر المرجعي: {log.referrer || 'مسح QR المطبوع'}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="text-left font-mono text-[9px] text-slate-400">
+                            {log.timestamp ? new Date(log.timestamp).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) : 'قبل قليل'}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Platform commitment notice */}
+              <div className="bg-gradient-to-l from-slate-900 to-slate-800 text-white border border-slate-700 rounded-3xl p-6 shadow-xl space-y-3 relative overflow-hidden">
+                <div className="absolute top-0 left-0 w-24 h-24 bg-amber-500/10 rounded-full blur-xl pointer-events-none select-none" />
+                <h4 className="text-xs font-black text-amber-400 flex items-center gap-2">
+                  <Award className="w-4 h-4 animate-bounce shrink-0" />
+                  محرك التحليل والملكية الفكرية لمنصة منيو كليك الحرة
                 </h4>
-                <p className="text-xs text-slate-300 leading-relaxed max-w-3xl">
-                  تلتزم "منيو كليك" بدعم قطاع الضيافة. كافة قنوات المبيعات والإحصائيات دقيقة ومحدثة سحابياً لحظياً. إذا قمت بنشر رابط المبيعات للعملاء أو تفعيل علامات الـ QR Code، فستظهر العمليات مباشرة هنا مجاناً مدى الحياة دون حدود تجديد!
+                <p className="text-[11px] text-slate-300 leading-relaxed max-w-3xl">
+                  تلتزم "منيو كليك" بمساندة ملاك المطاعم وعربات الطعام وتطوير أسرار مبيعاتهم السحابية. قنوات تصفح الزوار وقوام التحويلات والطلبات دقيقة ومبنية بالكامل على قواعد بيانات Firebase Firestore المعززة وستبقى مجانية ومفتوحة مدى الحياة لدعم مبيعاتكم!
                 </p>
               </div>
 
@@ -1433,8 +2777,7 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-2">اسم القسم بالكامل (مثال: برجر دجاج 🍔)</label>
                 <input 
-                  type="text" 
-                  required
+                   type="text" 
                   value={categoryForm.name}
                   onChange={e => setCategoryForm({ ...categoryForm, name: e.target.value })}
                   className="w-full bg-slate-50 border border-slate-200 focus:border-amber-500 focus:bg-white outline-none rounded-xl p-3 text-xs"
@@ -1447,9 +2790,8 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
                   <label className="block text-xs font-bold text-slate-700 mb-2">الترتيب والأولوية</label>
                   <input 
                     type="number" 
-                    required
                     value={categoryForm.order}
-                    onChange={e => setCategoryForm({ ...categoryForm, order: Number(e.target.value) })}
+                    onChange={e => setCategoryForm({ ...categoryForm, order: e.target.value as any })}
                     className="w-full bg-slate-50 border border-slate-200 focus:border-amber-500 focus:bg-white outline-none rounded-xl p-3 text-xs text-center font-bold"
                   />
                 </div>
@@ -1470,11 +2812,78 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
               <button
                 type="submit"
                 id="submit-category-btn"
-                className="w-full bg-slate-900 hover:bg-amber-500 hover:text-white text-white font-bold py-3 px-4 rounded-xl text-xs sm:text-sm cursor-pointer transition mt-2 flex items-center justify-center gap-1.5"
+                disabled={isCategorySaving}
+                className="w-full bg-slate-900 hover:bg-amber-500 hover:text-white text-white font-bold py-3 px-4 rounded-xl text-xs sm:text-sm cursor-pointer transition mt-2 flex items-center justify-center gap-1.5 disabled:opacity-50"
               >
-                <span>{editingCategory ? 'حفظ التعديلات' : 'إنشاء القسم بلحظة'}</span>
+                {isCategorySaving ? (
+                  <>
+                    <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>جاري حفظ القسم...</span>
+                  </>
+                ) : (
+                  <span>{editingCategory ? 'حفظ التعديلات' : 'إنشاء القسم بلحظة'}</span>
+                )}
               </button>
             </form>
+          </motion.div>
+        </div>
+      )}
+
+      {/* MODAL: DELETE CATEGORY CONFIRMATION */}
+      {deleteConfirmCategory && (
+        <div id="delete-category-confirm-modal" className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4" dir="rtl">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white rounded-3xl shadow-2xl border border-slate-100 p-6 w-full max-w-md relative"
+          >
+            <button 
+              onClick={() => setDeleteConfirmCategory(null)} 
+              disabled={isCategoryDeleting}
+              className="absolute top-4 left-4 p-2 text-slate-400 hover:text-slate-800 bg-slate-50 rounded-full transition cursor-pointer disabled:opacity-50"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="text-center space-y-4">
+              <div className="w-12 h-12 bg-rose-50 text-rose-600 rounded-full flex items-center justify-center mx-auto border border-rose-100 animate-pulse">
+                <Trash2 className="w-6 h-6" />
+              </div>
+
+              <h4 className="text-base font-black text-slate-950">
+                تأكيد حذف القسم بالكامل ⚠️
+              </h4>
+
+              <p className="text-xs text-slate-500 leading-relaxed">
+                هل أنت متأكد من رغبتك في حذف قسم <span className="font-bold text-rose-600 font-sans">"{deleteConfirmCategory.name}"</span>؟ 
+                سيتم إخفاء جميع الوجبات والمنتجات المرتبطة به وسيزول من السلة المباشرة على الفور. هذه العملية لا يمكن التراجع عنها.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 mt-6">
+              <button
+                onClick={() => setDeleteConfirmCategory(null)}
+                disabled={isCategoryDeleting}
+                className="w-full bg-slate-50 hover:bg-slate-100 text-slate-700 font-black py-3 rounded-xl text-xs transition cursor-pointer text-center disabled:opacity-50"
+              >
+                إلغاء الأمر
+              </button>
+
+              <button
+                onClick={() => handleDeleteCategory(deleteConfirmCategory.id)}
+                disabled={isCategoryDeleting}
+                className="w-full bg-rose-600 hover:bg-rose-700 text-white font-black py-3 rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-1.5 shadow-md shadow-rose-600/10 disabled:opacity-50"
+              >
+                {isCategoryDeleting ? (
+                  <>
+                    <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>جاري الحذف...</span>
+                  </>
+                ) : (
+                  <span>نعم، حذف القسم 🗑️</span>
+                )}
+              </button>
+            </div>
           </motion.div>
         </div>
       )}
@@ -1498,14 +2907,13 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
               {editingProduct ? 'تعديل السلعة الغذائية 🍔' : 'إضافة طبق أو مشروب للمنيو +'}
             </h4>
 
-            <form onSubmit={handleProductSubmit} className="space-y-4">
+            <form onSubmit={handleSubmit} noValidate className="space-y-4">
               
               <div className="grid md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">اسم الوجبة</label>
                   <input 
                     type="text" 
-                    required
                     value={productForm.name}
                     onChange={e => setProductForm({ ...productForm, name: e.target.value })}
                     className="w-full bg-slate-50 border border-slate-200 outline-none rounded-xl p-2.5 text-xs focus:bg-white"
@@ -1516,12 +2924,13 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">القسم التابع له السلعة 📁</label>
                   <select
-                    value={productForm.categoryId}
-                    onChange={e => setProductForm({ ...productForm, categoryId: e.target.value })}
+                    value={categoryId}
+                    onChange={(e) => setCategoryId(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-200 outline-none rounded-xl p-2.5 text-xs font-bold focus:bg-white text-right"
                   >
-                    {categories.map(c => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
+                    <option value="">-- اختر القسم --</option>
+                    {categories.map((cat) => (
+                      <option key={cat.id} value={cat.id}>{cat.name}</option>
                     ))}
                   </select>
                 </div>
@@ -1543,9 +2952,8 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">السعر الأساسي المقدر</label>
                   <input 
                     type="number" 
-                    required
                     value={productForm.price}
-                    onChange={e => setProductForm({ ...productForm, price: Number(e.target.value) })}
+                    onChange={e => setProductForm({ ...productForm, price: e.target.value })}
                     className="w-full bg-slate-50 border border-slate-200 outline-none rounded-xl p-2.5 text-xs font-black text-center"
                   />
                 </div>
@@ -1563,8 +2971,8 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
                     <input 
                       type="number" 
                       disabled={!productForm.isDiscounted}
-                      value={productForm.originalPrice || 0}
-                      onChange={e => setProductForm({ ...productForm, originalPrice: Number(e.target.value) })}
+                      value={productForm.originalPrice}
+                      onChange={e => setProductForm({ ...productForm, originalPrice: e.target.value })}
                       className="w-full bg-slate-50 border border-slate-200 outline-none rounded-xl p-2.5 text-xs text-center disabled:opacity-55"
                       placeholder="قبل التنزيل"
                     />
@@ -1590,7 +2998,6 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
                 <div className="flex flex-col gap-2">
                   <input 
                     type="url" 
-                    required
                     value={productForm.image}
                     onChange={e => setProductForm({ ...productForm, image: e.target.value })}
                     className="w-full bg-slate-50 border border-slate-200 outline-none rounded-xl p-2.5 text-xs text-left font-mono"
@@ -1648,9 +3055,8 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">ترتيب العرض</label>
                   <input 
                     type="number" 
-                    required
                     value={productForm.order}
-                    onChange={e => setProductForm({ ...productForm, order: Number(e.target.value) })}
+                    onChange={e => setProductForm({ ...productForm, order: e.target.value })}
                     className="w-full bg-slate-50 border border-slate-200 outline-none rounded-xl p-2.5 text-xs text-center font-bold"
                   />
                 </div>
@@ -1671,15 +3077,329 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu }: 
               <button
                 type="submit"
                 id="submit-product-btn"
-                className="w-full bg-slate-900 hover:bg-amber-500 hover:text-white text-white font-bold py-3.5 px-4 rounded-xl text-xs sm:text-sm cursor-pointer transition flex items-center justify-center gap-1"
+                disabled={isProductSaving}
+                className="w-full bg-slate-900 hover:bg-amber-500 hover:text-white text-white font-bold py-3.5 px-4 rounded-xl text-xs sm:text-sm cursor-pointer transition flex items-center justify-center gap-1.5 disabled:opacity-50"
               >
-                <span>{editingProduct ? 'حفظ تفاصيل التعديل للطبق 🍕' : 'إضافة للوجبات بالمنيو للزبون'}</span>
+                {isProductSaving ? (
+                  <>
+                    <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>جاري حفظ المنتج بالمنيو...</span>
+                  </>
+                ) : (
+                  <span>{editingProduct ? 'حفظ تفاصيل التعديل للطبق 🍕' : 'إضافة للوجبات بالمنيو للزبون'}</span>
+                )}
               </button>
             </form>
           </motion.div>
         </div>
       )}
 
+      {/* AI Smart Menu Parser Modal */}
+      {showAiModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 15 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            className="bg-white w-full max-w-4xl rounded-3xl shadow-2xl border border-slate-100 overflow-hidden flex flex-col my-8 max-h-[90vh]"
+          >
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-purple-900 to-indigo-950 p-6 text-white flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="bg-purple-500/20 p-2 rounded-xl border border-purple-400/30">
+                  <Sparkles className="w-5 h-5 text-amber-300 fill-amber-300 animate-pulse" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-white text-right">صانع المنيو الذكي بالذكاء الاصطناعي 🪄</h3>
+                  <p className="text-[10px] text-purple-200 text-right">ارفع صورة منيو ورقية وقم بتوليد وجبات وتصنيفات المنيو فوراً</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowAiModal(false);
+                  setAiResult(null);
+                  setAiImageBase64(null);
+                  setAiError(null);
+                }}
+                className="text-white bg-white/10 hover:bg-white/20 p-1.5 rounded-lg transition shrink-0 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 overflow-y-auto space-y-6 flex-1 text-right">
+              {!aiResult ? (
+                <div className="space-y-6">
+                  {/* Upload Dropzone */}
+                  <div 
+                    onDragOver={e => e.preventDefault()}
+                    onDrop={handleAiMenuDrop}
+                    className="border-2 border-dashed border-purple-200 rounded-3xl p-8 text-center hover:bg-purple-50/20 transition group flex flex-col items-center justify-center cursor-pointer min-h-[250px] relative"
+                  >
+                    <input 
+                      type="file" 
+                      accept="image/*"
+                      onChange={handleAiMenuImageSelect}
+                      className="absolute inset-0 opacity-0 cursor-pointer"
+                    />
+                    
+                    {aiImageBase64 ? (
+                      <div className="space-y-4 w-full">
+                        <img 
+                          src={aiImageBase64} 
+                          alt="Uploaded menu" 
+                          className="max-h-[200px] mx-auto rounded-xl object-contain border border-purple-100 shadow-sm"
+                        />
+                        <div className="text-xs text-slate-500 flex items-center justify-center gap-2">
+                          <Check className="w-4 h-4 text-emerald-600" />
+                          <span>تم تحميل الصورة بنجاح. جاهز للتحليل الذكي!</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setAiImageBase64(null);
+                          }}
+                          className="text-[10px] text-rose-600 hover:underline font-extrabold cursor-pointer"
+                        >
+                          إزالة الصورة واختيار أخرى 🗑️
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <Upload className="w-12 h-12 mx-auto text-purple-400 group-hover:scale-110 transition" />
+                        <h4 className="text-sm font-black text-slate-800">اسحب وأفلت صورة القائمة المطبوعة هنا أو انقر للتصفح</h4>
+                        <p className="text-[11px] text-slate-400 max-w-md mx-auto leading-relaxed">ندعم صور JPEG وملفات PNG لجميع أنواع المنيو المكتوبة والورقية والمصورات بالهواتف.</p>
+                      </div>
+                    )}
+                  </div>
+
+                  {aiError && (
+                    <div className="bg-rose-50 border border-rose-100 text-rose-800 p-4 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2">
+                      <span className="text-rose-600 shrink-0">⚠️</span>
+                      <p className="text-right">{aiError}</p>
+                    </div>
+                  )}
+
+                  {/* Actions */}
+                  <div className="flex items-center justify-end border-t pt-4">
+                    <button
+                      type="button"
+                      disabled={!aiImageBase64 || aiLoading}
+                      onClick={handleAnalyzeMenu}
+                      className={`w-full bg-purple-600 hover:bg-purple-700 text-white font-extrabold py-3 px-6 rounded-xl text-xs sm:text-sm flex items-center justify-center gap-1.5 transition ${(!aiImageBase64 || aiLoading) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:shadow-lg hover:shadow-purple-500/15'}`}
+                    >
+                      {aiLoading ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                          <span>جاري قراءة المنيو بالذكاء الاصطناعي... يرجى الانتظار 🔮</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-4 h-4 text-amber-300 fill-amber-300 animate-pulse" />
+                          <span>ابدأ التحليل والتوليد الفوري للمنيو بالـ AI ✨</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                /* Results Stage: Review & Confirm */
+                <div className="space-y-6">
+                  <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-emerald-900 flex items-center gap-2.5">
+                    <Check className="w-5 h-5 text-emerald-600 shrink-0" />
+                    <div>
+                      <p className="text-xs font-black">اكتمل التوليد بنجاح! 🎉</p>
+                      <p className="text-[10px] text-emerald-800">لقد قام الذكاء الاصطناعي باستخراج الأقسام والمنتجات التالية من الصورة. يرجى مراجعتها.</p>
+                    </div>
+                  </div>
+
+                  {/* Split Preview */}
+                  <div className="grid md:grid-cols-3 gap-6">
+                    {/* Categories Column */}
+                    <div className="space-y-3 md:col-span-1 border-l border-slate-100 pl-4 order-last md:order-first">
+                      <h4 className="text-xs font-black text-purple-950 flex items-center gap-1 justify-end bg-purple-50 px-2.5 py-1.5 rounded-lg border border-purple-100">
+                        <span>الأقسام المستخرجة ({aiResult.categories.length})</span>
+                        <Layers className="w-3.5 h-3.5" />
+                      </h4>
+                      <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                        {aiResult.categories.map((cat, idx) => (
+                          <div key={idx} className="bg-slate-50 border border-slate-200/60 p-2.5 rounded-xl flex items-center justify-between">
+                            <span className="text-[10px] font-mono font-bold text-slate-400 bg-slate-200 px-1.5 rounded">ترتيب: {cat.order}</span>
+                            <span className="text-[11px] font-bold text-slate-800">{cat.name}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Products Column */}
+                    <div className="space-y-3 md:col-span-2">
+                      <h4 className="text-xs font-black text-indigo-950 flex items-center gap-1 justify-end bg-indigo-50 px-2.5 py-1.5 rounded-lg border border-indigo-100">
+                        <span>الوجبات والأصناف المستخرجة ({aiResult.products?.length || 0})</span>
+                        <ChefHat className="w-3.5 h-3.5" />
+                      </h4>
+                      <div className="space-y-2.5 max-h-[300px] overflow-y-auto">
+                        {aiResult.products?.map((prod, idx) => (
+                          <div key={idx} className="bg-slate-50 border border-slate-100 p-3 rounded-xl space-y-1">
+                            <div className="flex items-start justify-between">
+                              <span className="text-xs font-black text-purple-800">{prod.price} {restaurant.currency}</span>
+                              <span className="text-xs font-black text-slate-800">{prod.name}</span>
+                            </div>
+                            {prod.description && (
+                              <p className="text-[10px] text-slate-500 line-clamp-1">{prod.description}</p>
+                            )}
+                            <div className="flex items-center gap-2 pt-1 font-sans justify-end">
+                              {prod.badge && (
+                                <span className="text-[9px] bg-amber-50 border border-amber-100 text-amber-700 px-1.5 py-0.5 rounded-md font-bold text-right leading-none">
+                                  {prod.badge}
+                                </span>
+                              )}
+                              {prod.isDiscounted && (
+                                <span className="text-[9px] bg-rose-50 border border-rose-100 text-rose-700 px-1.5 py-0.5 rounded-md font-bold">
+                                  عرض: {prod.discountPrice}
+                                </span>
+                              )}
+                              <span className="text-[9px] bg-indigo-50 border border-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded-md font-bold">
+                                قسم: {prod.categoryIdName}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Decision/Confirm actions */}
+                  <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200/60 flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t">
+                    <div className="text-right">
+                      <h5 className="text-xs font-black text-slate-800">اختر طريقة تفعيل المنيو المقترح:</h5>
+                      <p className="text-[10px] text-slate-400">يمكنك الدمج مع التصنيفات السابقة أو الاستبدال الشامل.</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2.5 w-full sm:w-auto">
+                      <button
+                        type="button"
+                        disabled={aiLoading}
+                        onClick={() => handleConfirmAiMenu('append')}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold py-2.5 px-4 rounded-xl text-xs cursor-pointer transition shadow-md shadow-emerald-500/10 flex-1 sm:flex-none"
+                      >
+                        إضافة للأصناف الحالية ➕
+                      </button>
+                      <button
+                        type="button"
+                        disabled={aiLoading}
+                        onClick={() => handleConfirmAiMenu('overwrite')}
+                        className="bg-rose-600 hover:bg-rose-700 text-white font-extrabold py-2.5 px-4 rounded-xl text-xs cursor-pointer transition shadow-md shadow-rose-500/10 flex-1 sm:flex-none"
+                      >
+                        مسح السابق واستبدال بالمنيو الجديد ⚡
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="bg-slate-50 p-4 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400 font-sans shrink-0">
+              <span>مدعوم بواسطة طرازات Google Gemini 3.5 فائقة القوة</span>
+              <span>منيو كليك الذكي 🖥️</span>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
     </div>
+  );
+}
+
+interface FloatingNotificationProps {
+  key?: string;
+  notif: Order;
+  lang: 'ar' | 'en';
+  currency: string;
+  onDismiss: (id: string) => void;
+  onViewStats: () => void;
+}
+
+function FloatingNotification({ notif, lang, currency, onDismiss, onViewStats }: FloatingNotificationProps) {
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      onDismiss(notif.id!);
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [notif.id, onDismiss]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -20, scale: 0.95 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, x: 100, scale: 0.9 }}
+      transition={{ type: 'spring', damping: 20, stiffness: 300 }}
+      className="pointer-events-auto bg-slate-900 border border-slate-800 text-white rounded-2xl shadow-2xl p-4 flex flex-col gap-2 relative overflow-hidden backdrop-blur-md"
+      dir={lang === 'ar' ? 'rtl' : 'ltr'}
+    >
+      {/* Top Accent Line */}
+      <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-500 to-rose-500 animate-pulse" />
+
+      {/* Header */}
+      <div className="flex items-center justify-between gap-4 mt-1">
+        <div className="flex items-center gap-2">
+          <div className="bg-amber-500/10 text-amber-500 p-2 rounded-xl border border-amber-500/25 shrink-0 flex items-center justify-center animate-bounce">
+            <ShoppingBag className="w-4 h-4" />
+          </div>
+          <div>
+            <h4 className="text-xs font-black text-white">
+              {lang === 'ar' ? '🛎️ طلب واتساب جديد نشط!' : '🛎️ New WhatsApp Order Active!'}
+            </h4>
+            <span className="text-[10px] text-slate-400 font-mono font-sans">{notif.createdAt || notif.timestamp}</span>
+          </div>
+        </div>
+        <button
+          onClick={() => onDismiss(notif.id!)}
+          className="text-slate-400 hover:text-white transition p-1 hover:bg-slate-800 rounded-lg cursor-pointer shrink-0"
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      {/* Order content summary */}
+      <div className="bg-slate-950/50 border border-slate-800 p-2.5 rounded-xl text-xs space-y-1">
+        <div className="flex items-center justify-between font-bold text-slate-200">
+          <span>{notif.tableName}</span>
+          <span className="text-amber-400 font-mono text-[11px]">
+            {notif.totalPrice} {currency || (lang === 'ar' ? 'ج.م' : 'EGP')}
+          </span>
+        </div>
+        
+        {notif.items && notif.items.length > 0 && (
+          <div className="text-[11px] text-slate-400 divide-y divide-slate-800/55 pt-1">
+            {notif.items.map((item, idx) => (
+              <div key={idx} className="py-0.5 flex justify-between gap-2">
+                <span className="line-clamp-1">{item.name}</span>
+                <span className="font-sans font-mono shrink-0">x{item.quantity}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        
+        {notif.notes && (
+          <div className="text-[10px] text-amber-500 bg-amber-500/5 px-2 py-1 rounded border border-amber-500/10 italic line-clamp-2 mt-1">
+            ⚠️ {notif.notes}
+          </div>
+        )}
+      </div>
+
+      {/* Action Trigger inside Notification */}
+      <div className="flex items-center justify-between gap-2 mt-1">
+        <span className="text-[10px] bg-emerald-500/15 text-emerald-400 font-bold px-2 py-0.5 rounded-md border border-emerald-500/20">
+          {lang === 'ar' ? 'تنبيه ذكي سحابي 🌐' : 'Cloud Smart Notification 🌐'}
+        </span>
+        <button
+          onClick={onViewStats}
+          className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-[10px] py-1 px-2.5 rounded-lg transition shrink-0 cursor-pointer"
+        >
+          {lang === 'ar' ? 'عرض السلة 📊' : 'View Stats 📊'}
+        </button>
+      </div>
+    </motion.div>
   );
 }

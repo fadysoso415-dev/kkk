@@ -10,7 +10,10 @@ import {
   signInWithPopup, 
   signOut,
   onAuthStateChanged,
-  User
+  User,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  updateProfile
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -29,13 +32,32 @@ import {
   increment
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
-import { Restaurant, Category, Product } from './types';
+import { Restaurant, Category, Product, Order, ViewLog } from './types';
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId); /* CRITICAL: The app will break without this line */
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+
+/**
+ * Recursively cleans any object of undefined keys before transmitting to Firestore.
+ */
+export function cleanUndefined<T>(obj: T): T {
+  if (obj === null || typeof obj !== 'object') {
+    return obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(item => cleanUndefined(item)) as any;
+  }
+  const cleaned: any = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      cleaned[key] = cleanUndefined(value);
+    }
+  }
+  return cleaned as T;
+}
 
 export enum OperationType {
   CREATE = 'create',
@@ -103,7 +125,43 @@ export async function signInWithGoogle(): Promise<User | null> {
     return result.user;
   } catch (error) {
     console.error("Google login failed", error);
-    return null;
+    throw error;
+  }
+}
+
+export async function signUpWithCredentials(name: string, emailOrPhone: string, password: string): Promise<User | null> {
+  let email = emailOrPhone.trim();
+  // Normalize custom usernames/phones to virtual emails to fit Firebase Auth schema
+  if (!email.includes('@')) {
+    const cleanStr = email.replace(/\+/g, '').replace(/[^a-zA-Z0-9]/g, '');
+    email = `${cleanStr}@menuclick.local`;
+  }
+  
+  try {
+    const credential = await createUserWithEmailAndPassword(auth, email, password);
+    if (credential.user) {
+      await updateProfile(credential.user, { displayName: name });
+    }
+    return credential.user;
+  } catch (error: any) {
+    console.error("Sign up error in credentials:", error);
+    throw error;
+  }
+}
+
+export async function signInWithCredentials(emailOrPhone: string, password: string): Promise<User | null> {
+  let email = emailOrPhone.trim();
+  if (!email.includes('@')) {
+    const cleanStr = email.replace(/\+/g, '').replace(/[^a-zA-Z0-9]/g, '');
+    email = `${cleanStr}@menuclick.local`;
+  }
+  
+  try {
+    const credential = await signInWithEmailAndPassword(auth, email, password);
+    return credential.user;
+  } catch (error: any) {
+    console.error("Sign in error in credentials:", error);
+    throw error;
   }
 }
 
@@ -156,7 +214,7 @@ export async function getRestaurantsByOwner(ownerUid: string): Promise<Restauran
 export async function saveRestaurant(id: string, data: Partial<Restaurant>): Promise<void> {
   const rRef = doc(db, 'restaurants', id);
   try {
-    await setDoc(rRef, data, { merge: true });
+    await setDoc(rRef, cleanUndefined(data), { merge: true });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `restaurants/${id}`);
   }
@@ -183,6 +241,72 @@ export async function incrementWhatsappOrders(id: string): Promise<void> {
   }
 }
 
+// Log a menu view event inside the subcollection
+export async function logMenuView(restaurantId: string): Promise<void> {
+  try {
+    const colRef = collection(db, 'restaurants', restaurantId, 'views_log');
+    const docRef = doc(colRef);
+    
+    // Simple device detection
+    const ua = navigator.userAgent;
+    let device: 'iPhone' | 'Android' | 'Desktop' | 'Other' = 'Other';
+    if (/iPhone|iPad/i.test(ua)) {
+      device = 'iPhone';
+    } else if (/Android/i.test(ua)) {
+      device = 'Android';
+    } else if (/Macintosh|Windows|Linux/i.test(ua)) {
+      device = 'Desktop';
+    }
+
+    const payload: Omit<ViewLog, 'id'> = {
+      timestamp: new Date().toISOString(),
+      device,
+      userAgent: ua.slice(0, 300),
+      referrer: document.referrer || 'direct'
+    };
+    await setDoc(docRef, cleanUndefined(payload));
+  } catch (error) {
+    console.warn("Could not log menu view doc", error);
+  }
+}
+
+// Log an order event inside the subcollection
+export async function logOrder(restaurantId: string, orderData: Omit<Order, 'id'>): Promise<void> {
+  try {
+    const colRef = collection(db, 'restaurants', restaurantId, 'orders');
+    const docRef = doc(colRef);
+    await setDoc(docRef, cleanUndefined(orderData));
+  } catch (error) {
+    console.warn("Could not log order doc", error);
+  }
+}
+
+// Retrieve real orders from Firestore
+export async function getOrders(restaurantId: string): Promise<Order[]> {
+  const colRef = collection(db, 'restaurants', restaurantId, 'orders');
+  const q = query(colRef, orderBy('timestamp', 'desc'));
+  try {
+    const snap = await getDocs(q);
+    return snap.docs.map(d => ({ id: d.id, ...d.data() } as Order));
+  } catch (error) {
+    console.warn("Could not retrieve orders log", error);
+    return [];
+  }
+}
+
+// Retrieve real visitor views log from Firestore
+export async function getViewsLog(restaurantId: string): Promise<ViewLog[]> {
+  const colRef = collection(db, 'restaurants', restaurantId, 'views_log');
+  const q = query(colRef, orderBy('timestamp', 'desc'));
+  try {
+    const snap = await getDocs(q);
+    return snap.docs.map(d => ({ id: d.id, ...d.data() } as ViewLog));
+  } catch (error) {
+    console.warn("Could not retrieve views log", error);
+    return [];
+  }
+}
+
 // --- Categories ---
 export async function getCategories(restaurantId: string): Promise<Category[]> {
   const cRef = collection(db, 'restaurants', restaurantId, 'categories');
@@ -199,7 +323,7 @@ export async function getCategories(restaurantId: string): Promise<Category[]> {
 export async function saveCategory(restaurantId: string, categoryId: string, data: Omit<Category, 'id'>): Promise<void> {
   const docRef = doc(db, 'restaurants', restaurantId, 'categories', categoryId);
   try {
-    await setDoc(docRef, data);
+    await setDoc(docRef, cleanUndefined(data));
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `restaurants/${restaurantId}/categories/${categoryId}`);
   }
@@ -230,7 +354,7 @@ export async function getProducts(restaurantId: string): Promise<Product[]> {
 export async function saveProduct(restaurantId: string, productId: string, data: Omit<Product, 'id'>): Promise<void> {
   const docRef = doc(db, 'restaurants', restaurantId, 'products', productId);
   try {
-    await setDoc(docRef, data);
+    await setDoc(docRef, cleanUndefined(data));
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `restaurants/${restaurantId}/products/${productId}`);
   }

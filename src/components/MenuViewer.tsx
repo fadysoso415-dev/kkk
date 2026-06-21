@@ -26,7 +26,8 @@ import {
   Sparkles,
   Search,
   ChevronDown,
-  Share2
+  Share2,
+  MessageCircle
 } from 'lucide-react';
 import { Restaurant, Category, Product, CartItem } from '../types';
 import { 
@@ -35,17 +36,122 @@ import {
   getProducts, 
   incrementRestaurantViews, 
   incrementWhatsappOrders,
+  logMenuView,
+  logOrder,
   db
 } from '../firebase';
 import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
 import { SAMPLE_RESTAURANTS, SAMPLE_CATEGORIES, SAMPLE_PRODUCTS } from '../sampleData';
 
+const THEME_PRESETS = {
+  amber: {
+    primary: '#d97706',
+    text: 'text-amber-600 dark:text-amber-400',
+    accentText: 'text-amber-700 dark:text-amber-400',
+    bgLight: 'bg-amber-500/10 dark:bg-amber-400/10',
+    borderLight: 'border-amber-500/20',
+    bg: 'bg-amber-500',
+    hoverBg: 'hover:bg-amber-600',
+    shadow: 'shadow-amber-500/10 shadow-md',
+    spinnerBorder: 'border-amber-500'
+  },
+  emerald: {
+    primary: '#059669',
+    text: 'text-emerald-600 dark:text-emerald-400',
+    accentText: 'text-emerald-700 dark:text-emerald-400',
+    bgLight: 'bg-emerald-500/10 dark:bg-emerald-400/10',
+    borderLight: 'border-emerald-500/20',
+    bg: 'bg-emerald-500',
+    hoverBg: 'hover:bg-emerald-600',
+    shadow: 'shadow-emerald-500/10 shadow-md',
+    spinnerBorder: 'border-emerald-500'
+  },
+  rose: {
+    primary: '#e11d48',
+    text: 'text-rose-600 dark:text-rose-400',
+    accentText: 'text-rose-700 dark:text-rose-400',
+    bgLight: 'bg-rose-500/10 dark:bg-rose-400/10',
+    borderLight: 'border-rose-500/20',
+    bg: 'bg-rose-500',
+    hoverBg: 'hover:bg-rose-600',
+    shadow: 'shadow-rose-500/10 shadow-md',
+    spinnerBorder: 'border-rose-500'
+  },
+  indigo: {
+    primary: '#4f46e5',
+    text: 'text-indigo-600 dark:text-indigo-400',
+    accentText: 'text-indigo-700 dark:text-indigo-400',
+    bgLight: 'bg-indigo-500/10 dark:bg-indigo-400/10',
+    borderLight: 'border-indigo-500/20',
+    bg: 'bg-indigo-500',
+    hoverBg: 'hover:bg-indigo-600',
+    shadow: 'shadow-indigo-500/10 shadow-md',
+    spinnerBorder: 'border-indigo-500'
+  },
+  slate: {
+    primary: '#475569',
+    text: 'text-slate-600 dark:text-slate-400',
+    accentText: 'text-slate-700 dark:text-slate-400',
+    bgLight: 'bg-slate-500/10 dark:bg-slate-400/10',
+    borderLight: 'border-slate-500/20',
+    bg: 'bg-slate-500',
+    hoverBg: 'hover:bg-slate-600',
+    shadow: 'shadow-slate-500/10 shadow-md',
+    spinnerBorder: 'border-slate-500'
+  },
+  violet: {
+    primary: '#7c3aed',
+    text: 'text-violet-600 dark:text-violet-400',
+    accentText: 'text-violet-700 dark:text-violet-400',
+    bgLight: 'bg-violet-500/10 dark:bg-violet-400/10',
+    borderLight: 'border-violet-500/20',
+    bg: 'bg-violet-500',
+    hoverBg: 'hover:bg-violet-600',
+    shadow: 'shadow-violet-500/10 shadow-md',
+    spinnerBorder: 'border-violet-500'
+  },
+  dark: {
+    primary: '#111827',
+    text: 'text-slate-900 dark:text-slate-100',
+    accentText: 'text-slate-800 dark:text-slate-300',
+    bgLight: 'bg-slate-100 dark:bg-slate-800',
+    borderLight: 'border-slate-200 dark:border-slate-850',
+    bg: 'bg-slate-900 dark:bg-slate-800',
+    hoverBg: 'hover:bg-slate-800 dark:hover:bg-slate-700',
+    shadow: 'shadow-slate-900/10 shadow-md',
+    spinnerBorder: 'border-slate-700'
+  },
+  autumn: {
+    primary: '#ea580c',
+    text: 'text-orange-600 dark:text-orange-400',
+    accentText: 'text-orange-700 dark:text-orange-400',
+    bgLight: 'bg-orange-500/10 dark:bg-orange-400/10',
+    borderLight: 'border-orange-500/20',
+    bg: 'bg-orange-500',
+    hoverBg: 'hover:bg-orange-600',
+    shadow: 'shadow-orange-500/10 shadow-md',
+    spinnerBorder: 'border-orange-500'
+  },
+  coffee: {
+    primary: '#78350f',
+    text: 'text-amber-900 dark:text-amber-300',
+    accentText: 'text-amber-950 dark:text-amber-200',
+    bgLight: 'bg-amber-950/10 dark:bg-amber-950/15',
+    borderLight: 'border-amber-950/20',
+    bg: 'bg-amber-950',
+    hoverBg: 'hover:bg-amber-900',
+    shadow: 'shadow-amber-950/10 shadow-md',
+    spinnerBorder: 'border-amber-950'
+  }
+};
+
 interface MenuViewerProps {
   restaurantSlug: string;
   onBackToLanding: () => void;
+  lang?: 'ar' | 'en';
 }
 
-export default function MenuViewer({ restaurantSlug, onBackToLanding }: MenuViewerProps) {
+export default function MenuViewer({ restaurantSlug, onBackToLanding, lang: initialLang = 'ar' }: MenuViewerProps) {
   const [restaurant, setRestaurant] = useState<Restaurant | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -55,6 +161,86 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding }: MenuView
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(true);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [lang, setLang] = useState<'ar' | 'en'>(initialLang);
+
+  useEffect(() => {
+    if (initialLang) {
+      setLang(initialLang);
+    }
+  }, [initialLang]);
+
+  const t = {
+    ar: {
+      searchPlaceholder: "ابحث عن وجبة أو شراب في الـ QR...",
+      allCategories: "كل المأكولات 🍽️",
+      cartTitle: "سلة المأكولات والمقبلات (الـ QR)",
+      emptyCart: "السلة فارغة حالياً. أضف وجباتك لتسهيل تجهيز المطبخ!",
+      tableNameLabel: "رقم أو كود طاولة الجلوس / اسم الزبون 🛎️ *",
+      tableNamePlaceholder: "طاولة رقم #4 أو سفري عائلي",
+      notesLabel: "إرشادات المطبخ أو بهارات خاصة للوجبة (اختياري)",
+      notesPlaceholder: "مثال: بدون مايونيز، صوص زيادة...",
+      orderPrice: "إجمالي السلة ✅",
+      subtotal: "الحساب الإجمالي للطلب 🧾",
+      submitOrder: "إرسال الطلب عبر الواتس اب 💬",
+      addToCart: "إضافة للسلة +",
+      outOfStock: "غير متوفر مؤقتاً ⛔",
+      shareMenu: "مشاركة",
+      welcome: "مرحباً",
+      currencySymbol: restaurant?.currency || "EGP",
+      noAvailable: "غير متوفر ❌",
+      cartSubtotal: "حساب الوجبات الفرعي:",
+      taxNote: "شامل ضريبة القيمة المضافة ورسم الطاولة.",
+      smartRecommendations: "توصيات ذكية ✨",
+      toastShare: "تم نسخ رابط المنيو بنجاح (QR URL)! جاهز الآن للمشاركة 📋",
+      toastNoShare: "عذراً، لم نتمكن من نسخ الرابط تلقائياً.",
+      requiredTableError: "الرجاء تحديد رقم الطاولة أو اسم المستلم لتزويد الطاهي بالهوية الصحيحة للطلب.",
+      updatingCart: "تحديث الطلب ومراجعته 📱",
+      closedToday: "انتهى اليوم",
+      backLink: "منيو كليك",
+      chatRestaurant: "محادثة المطعم 💬",
+      whatsappRest: "واتساب المطعم 💬",
+      invoiceTitle: "إجمالي الحساب الفاتورة:",
+      notAvailableDesc: "لا توجد منتجات مطابقة لعملية البحث",
+      notAvailablep: "جرب تصفح قسم آخر أو تعديل حقول البحث.",
+      checkoutWarning: "سيتم تجهيز طلبك في المطبخ وتحويلك لتستلم تفاصيل الفاتورة على الواتساب مع العاملين بالصالة.",
+      shareText: `تصفح منيو ${restaurant?.name} الإلكتروني والطلب المباشر! 🍽️✨`
+    },
+    en: {
+      searchPlaceholder: "Search for food or drinks... 🔍",
+      allCategories: "All Dishes 🍽️",
+      cartTitle: "Food & Drinks Cart (QR)",
+      emptyCart: "Your cart is empty! Add dishes to prepare your order.",
+      tableNameLabel: "Table Number or Customer Name 🛎️ *",
+      tableNamePlaceholder: "Table #4 or Takeaway",
+      notesLabel: "Kitchen instructions or special spices (Optional)",
+      notesPlaceholder: "E.g., No mayo, extra sauce, warm...",
+      orderPrice: "Cart Total ✅",
+      subtotal: "Total Invoice Amount 🧾",
+      submitOrder: "Send Order via WhatsApp Now 💬",
+      addToCart: "Add to Cart +",
+      outOfStock: "Out of Stock today ⛔",
+      shareMenu: "Share",
+      welcome: "Welcome",
+      currencySymbol: restaurant?.currencyEn || restaurant?.currency || "EGP",
+      noAvailable: "Out of Stock ❌",
+      cartSubtotal: "Items Subtotal:",
+      taxNote: "Includes VAT and service charge.",
+      smartRecommendations: "Smart choices ✨",
+      toastShare: "Menu link successfully copied to clipboard! Share it! 📋",
+      toastNoShare: "Sorry, failed to copy the link automatically.",
+      requiredTableError: "Please specify table number or customer name to place order.",
+      updatingCart: "Review & Order 📱",
+      closedToday: "Finished Today",
+      backLink: "MenuClick",
+      chatRestaurant: "Chat live 💬",
+      whatsappRest: "WhatsApp 💬",
+      invoiceTitle: "Total Invoice Amount:",
+      notAvailableDesc: "No items matching your search key",
+      notAvailablep: "Try choosing another category or clearing search filter.",
+      checkoutWarning: "Your order will be prepared in our kitchen and you will be redirected to confirm details on WhatsApp.",
+      shareText: `Check out ${restaurant?.nameEn || restaurant?.name}'s digital menu and order now! 🍽️✨`
+    }
+  }[lang];
 
   // Custom function to show a beautiful temporary message
   const triggerToast = (msg: string) => {
@@ -66,8 +252,8 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding }: MenuView
   const handleShare = async () => {
     if (!restaurant) return;
     const shareUrl = window.location.href;
-    const shareTitle = restaurant.name;
-    const shareText = `تصفح منيو ${restaurant.name} الإلكتروني والطلب المباشر! 🍽️✨`;
+    const shareTitle = lang === 'en' ? (restaurant.nameEn || restaurant.name) : restaurant.name;
+    const shareText = t.shareText;
 
     if (navigator.share) {
       try {
@@ -82,10 +268,10 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding }: MenuView
     } else {
       try {
         await navigator.clipboard.writeText(shareUrl);
-        triggerToast("تم نسخ رابط المنيو بنجاح (QR URL)! جاهز الآن للمشاركة 📋");
+        triggerToast(t.toastShare);
       } catch (err) {
         console.error("Clipboard copy failed:", err);
-        triggerToast("عذراً، لم نتمكن من نسخ الرابط تلقائياً.");
+        triggerToast(t.toastNoShare);
       }
     }
   };
@@ -191,6 +377,7 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding }: MenuView
           
           // Fire-and-forget logging increment view inside db
           incrementRestaurantViews(currentRest.id);
+          logMenuView(currentRest.id);
 
           // Configure real-time synchronization live listeners so modifications reflect instantly!
           const catsRef = collection(db, 'restaurants', currentRest.id, 'categories');
@@ -283,30 +470,72 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding }: MenuView
   const handleCheckoutWhatsApp = () => {
     if (!restaurant) return;
     if (!tableNameInput.trim()) {
-      alert("الرجاء تحديد رقم الطاولة أو اسم المستلم لتزويد الطاهي بالهوية الصحيحة للطلب.");
+      alert(t.requiredTableError);
       return;
     }
 
-    // Format Arabic whatsapp text string template
-    let text = `*طلب جديد للمطبخ من مناديب الطاولات 🛎️*\n`;
-    text += `*اسم الزبون / رقم الطاولة:* ${tableNameInput.trim()}\n`;
-    if (checkoutNotes.trim()) {
-      text += `*ملاحظات الزبون:* ${checkoutNotes.trim()}\n`;
+    let text = "";
+    if (lang === 'en') {
+      text = `*New Kitchen Order from Clients 🛎️*\n`;
+      text += `*Table / Customer Name:* ${tableNameInput.trim()}\n`;
+      if (checkoutNotes.trim()) {
+        text += `*Notes:* ${checkoutNotes.trim()}\n`;
+      }
+      text += `\n---------------------------------\n`;
+      text += `*Requested Items:*\n`;
+
+      cart.forEach((item, idx) => {
+        const itemPrice = item.product.isDiscounted && item.product.discountPrice 
+          ? item.product.discountPrice 
+          : item.product.price;
+        text += `${idx + 1}- _${item.product.nameEn || item.product.name}_ [Qty: ${item.quantity}] \n`;
+        text += `    Price: ${itemPrice * item.quantity} ${restaurant.currencyEn || restaurant.currency || 'EGP'}\n`;
+      });
+
+      text += `---------------------------------\n`;
+      text += `*Total Order Value:* *${getCartTotal()} ${restaurant.currencyEn || restaurant.currency || 'EGP'}*\n\n`;
+      text += `_Created via MenuClick Quick Digital Gateway_`;
+    } else {
+      text = `*طلب جديد للمطبخ من مناديب الطاولات 🛎️*\n`;
+      text += `*اسم الزبون / رقم الطاولة:* ${tableNameInput.trim()}\n`;
+      if (checkoutNotes.trim()) {
+        text += `*ملاحظات الزبون:* ${checkoutNotes.trim()}\n`;
+      }
+      text += `\n---------------------------------\n`;
+      text += `*الأصناف والمشروبات المطلوبة:*\n`;
+
+      cart.forEach((item, idx) => {
+        const itemPrice = item.product.isDiscounted && item.product.discountPrice 
+          ? item.product.discountPrice 
+          : item.product.price;
+        text += `${idx + 1}- _${item.product.name}_ [عدد: ${item.quantity}] \n`;
+        text += `    السعر: ${itemPrice * item.quantity} ${restaurant.currency}\n`;
+      });
+
+      text += `---------------------------------\n`;
+      text += `*الحساب الإجمالي للطلب:* *${getCartTotal()} ${restaurant.currency}*\n\n`;
+      text += `_تم إنشاؤه وصياغته عبر بوابة منيو كليك السريعة_`;
     }
-    text += `\n---------------------------------\n`;
-    text += `*الأصناف والمشروبات المطلوبة:*\n`;
 
-    cart.forEach((item, idx) => {
-      const itemPrice = item.product.isDiscounted && item.product.discountPrice 
-        ? item.product.discountPrice 
-        : item.product.price;
-      text += `${idx + 1}- _${item.product.name}_ [عدد: ${item.quantity}] \n`;
-      text += `    السعر: ${itemPrice * item.quantity} ${restaurant.currency}\n`;
+    // Log real order to Firestore for analytics
+    logOrder(restaurant.id, {
+      tableName: tableNameInput.trim(),
+      totalPrice: getCartTotal(),
+      notes: checkoutNotes.trim(),
+      timestamp: new Date().toISOString(),
+      createdAt: new Date().toLocaleString(lang === 'en' ? 'en-US' : 'ar-EG'),
+      items: cart.map(item => {
+        const itemPrice = item.product.isDiscounted && item.product.discountPrice 
+          ? item.product.discountPrice 
+          : item.product.price;
+        return {
+          productId: item.product.id,
+          name: lang === 'en' ? (item.product.nameEn || item.product.name) : item.product.name,
+          price: itemPrice,
+          quantity: item.quantity
+        };
+      })
     });
-
-    text += `---------------------------------\n`;
-    text += `*الحساب الإجمالي للطلب:* *${getCartTotal()} ${restaurant.currency}*\n\n`;
-    text += `_تم إنشاؤه وصياغته عبر بوابة منيو كليك السريعة_`;
 
     // Dynamic database tracking logging event
     incrementWhatsappOrders(restaurant.id);
@@ -361,8 +590,31 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding }: MenuView
 
   const activeCategories = categories.filter(cat => cat.isActive);
 
+  // Active theme presets configurations
+  const activePresetKey = restaurant?.themePreset || 'amber';
+  const preset = THEME_PRESETS[activePresetKey as keyof typeof THEME_PRESETS] || THEME_PRESETS.amber;
+  const customColor = restaurant?.primaryColor;
+
+  // Class presets
+  const textClass = customColor ? "" : preset.text;
+  const accentTextClass = customColor ? "" : preset.accentText;
+  const bgClass = customColor ? "" : preset.bg;
+  const bgLightClass = customColor ? "" : preset.bgLight;
+  const borderLightClass = customColor ? "" : preset.borderLight;
+  const hoverBgClass = customColor ? "" : preset.hoverBg;
+  const shadowClass = customColor ? "" : preset.shadow;
+
+  // Custom Inline Styles
+  const textStyle = customColor ? { color: customColor } : {};
+  const bgStyle = customColor ? { backgroundColor: customColor } : {};
+  const borderLightStyle = customColor ? { borderColor: `${customColor}20` } : {};
+  const bgLightStyle = customColor ? { backgroundColor: `${customColor}15` } : {};
+  const badgeStyle = customColor ? { backgroundColor: `${customColor}15`, color: customColor } : {};
+  const borderStyle = customColor ? { borderColor: customColor } : {};
+  const shadowStyle = customColor ? { boxShadow: `0 4px 10px -1px ${customColor}20` } : {};
+
   return (
-    <div className={`w-full min-h-screen font-sans transition-colors duration-200 ${isDarkMode ? 'dark bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900'}`} dir="rtl">
+    <div className={`w-full min-h-screen font-sans transition-colors duration-200 ${isDarkMode ? 'dark bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900'}`} dir={lang === 'ar' ? 'rtl' : 'ltr'}>
       
       {/* Centered screen boundary similar to global high-end web applications */}
       <div className="w-full max-w-md mx-auto min-h-screen relative flex flex-col shadow-2xl border-x border-slate-200/50 bg-white dark:bg-slate-900">
@@ -373,25 +625,38 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding }: MenuView
             onClick={onBackToLanding}
             className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white text-xs font-bold transition cursor-pointer"
           >
-            <ArrowRight className="w-4 h-4 ml-1" />
-            منيو كليك
+            {lang === 'ar' && <ArrowRight className="w-4 h-4 ml-1" />}
+            {t.backLink}
+            {lang === 'en' && <ArrowRight className="w-4 h-4 mr-1 rotate-180" />}
           </button>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
+            {restaurant.enableEnglish && (
+              <button
+                onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')}
+                className={`flex items-center gap-1 px-2.5 py-2 rounded-xl border hover:scale-105 active:scale-95 transition cursor-pointer text-[10px] font-black font-sans leading-none select-none ${bgLightClass} ${textClass} ${borderLightClass}`}
+                style={customColor ? { color: customColor, borderColor: `${customColor}25`, backgroundColor: `${customColor}15` } : {}}
+              >
+                <span>{lang === 'ar' ? 'EN 🇺🇸' : 'العربية 🇸🇦'}</span>
+              </button>
+            )}
+
             <button
               onClick={handleShare}
-              title="مشاركة رابط المنيو"
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-500/10 hover:bg-amber-500 text-amber-700 hover:text-white border border-amber-500/20 hover:scale-105 active:scale-95 transition cursor-pointer text-[11px] font-extrabold select-none"
+              title={t.shareMenu}
+              className={`flex items-center gap-1 px-2.5 py-2 rounded-xl border hover:scale-105 active:scale-95 transition cursor-pointer text-[10px] font-black leading-none select-none ${bgLightClass} ${hoverBgClass} ${textClass} hover:text-white ${borderLightClass}`}
+              style={customColor ? { color: customColor, borderColor: `${customColor}25`, backgroundColor: `${customColor}15` } : {}}
             >
-              <Share2 className="w-3.5 h-3.5" />
-              <span>مشاركة</span>
+              <Share2 className="w-3 h-3" />
+              <span>{t.shareMenu}</span>
             </button>
 
             <button
               onClick={() => setIsDarkMode(!isDarkMode)}
-              className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-amber-400 hover:scale-105 active:scale-95 transition cursor-pointer"
+              className={`p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 hover:scale-105 active:scale-95 transition cursor-pointer ${textClass}`}
+              style={isDarkMode ? textStyle : {}}
             >
-              {isDarkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+              {isDarkMode ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
             </button>
           </div>
         </header>
@@ -401,50 +666,72 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding }: MenuView
           <img 
             src={restaurant.cover} 
             className="w-full h-full object-cover" 
-            alt={restaurant.name}
+            alt={lang === 'en' ? (restaurant.nameEn || restaurant.name) : restaurant.name}
           />
           <div className="absolute inset-0 bg-gradient-to-t from-slate-950/85 via-slate-950/40 to-transparent pointer-events-none" />
           
           {/* Cover Details overlay */}
-          <div className="absolute inset-0 p-4 flex flex-col justify-end text-white text-right">
-            <div className="flex items-center gap-3">
-              <img 
-                src={restaurant.logo} 
-                className="w-12 h-12 rounded-full border-2 border-white/80 bg-white shadow-lg object-cover" 
-                alt="logo"
-              />
-              <div>
-                <h2 className="text-base font-black tracking-tight leading-tight">{restaurant.name}</h2>
-                <p className="text-[10px] text-slate-300 mt-0.5 flex items-center gap-1">
-                  <MapPin className="w-3 h-3 text-amber-500" />
-                  <span>{restaurant.address}</span>
+          <div className={`absolute inset-0 p-4 flex flex-col justify-end text-white ${lang === 'ar' ? 'text-right' : 'text-left'}`}>
+            <div className={`flex items-center gap-3 ${lang === 'en' ? 'flex-row' : 'flex-row-reverse'}`}>
+              <div className="text-right flex-1">
+                <h2 className={`text-base font-black tracking-tight leading-tight text-white ${lang === 'en' ? 'text-left' : 'text-right'}`}>{lang === 'en' ? (restaurant.nameEn || restaurant.name) : restaurant.name}</h2>
+                <p className={`text-[10px] text-slate-300 mt-0.5 flex items-center gap-1 ${lang === 'en' ? 'justify-start' : 'justify-end'}`}>
+                  <MapPin className="w-3 h-3 text-amber-500" style={textStyle} />
+                  <span>{lang === 'en' ? (restaurant.addressEn || restaurant.address) : restaurant.address}</span>
                 </p>
               </div>
+              <img 
+                src={restaurant.logo} 
+                className="w-12 h-12 rounded-full border-2 border-white/80 bg-white shadow-lg object-cover shrink-0" 
+                alt="logo"
+              />
             </div>
           </div>
         </div>
 
         {/* Welcome message section */}
-        <div className="p-4 bg-amber-500/5 dark:bg-amber-400/5 border-b border-amber-500/10 p-3.5 space-y-1">
-          <h4 className="text-xs font-black text-amber-600 dark:text-amber-400 flex items-center gap-1">
-            <Sparkles className="w-3.5 h-3.5" />
-            {restaurant.welcomeTitle || 'مرحباً بالضيوف الأعزاء'}
-          </h4>
-          <p className="text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed text-right font-medium">
-            {restaurant.welcomeSubtitle || 'شرفنا تصفحكم للمنيو وتقديم ألذ الأصناف.'}
-          </p>
+        <div 
+          className={`p-4 border-b p-3.5 space-y-2 ${bgLightClass} ${borderLightClass}`}
+          style={customColor ? { backgroundColor: `${customColor}10`, borderColor: `${customColor}15` } : {}}
+        >
+          <div className="flex justify-between items-start gap-4">
+            <div className={`space-y-1 flex-1 ${lang === 'ar' ? 'text-right' : 'text-left'}`}>
+              <h4 
+                className={`text-xs font-black flex items-center gap-1 ${accentTextClass} ${lang === 'en' ? 'justify-start' : 'justify-end'}`}
+                style={textStyle}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                {lang === 'en' ? (restaurant.welcomeTitleEn || restaurant.welcomeTitle || 'Welcome!') : (restaurant.welcomeTitle || 'مرحباً بالضيوف الأعزاء')}
+              </h4>
+              <p className="text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed font-medium">
+                {lang === 'en' ? (restaurant.welcomeSubtitleEn || restaurant.welcomeSubtitle || 'Check out our digital menu.') : (restaurant.welcomeSubtitle || 'شرفنا تصفحكم للمنيو وتقديم ألذ الأصناف.')}
+              </p>
+            </div>
+
+            {restaurant.phoneNumber && (
+              <a 
+                href={`https://wa.me/${restaurant.phoneNumber.replace('+', '').replace(/\s+/g, '')}`}
+                target="_blank"
+                rel="noreferrer"
+                className="shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 dark:bg-emerald-600 dark:hover:bg-emerald-700 text-white font-extrabold text-[10px] sm:text-xs transition-all duration-150 shadow-md shadow-emerald-500/10 hover:scale-105 active:scale-95"
+              >
+                <MessageCircle className="w-3.5 h-3.5 fill-white" />
+                <span>{t.whatsappRest}</span>
+              </a>
+            )}
+          </div>
         </div>
 
         {/* Dynamic Live Categorized search input */}
         <div className="p-3.5 border-b border-slate-100 dark:border-slate-800">
           <div className="relative w-full">
-            <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <Search className={`absolute ${lang === 'ar' ? 'right-3' : 'left-3'} top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400`} />
             <input 
               type="text" 
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-100 dark:bg-slate-800 focus:bg-white dark:focus:bg-slate-950 px-9 py-2.5 rounded-xl outline-none text-xs text-right text-slate-800 dark:text-slate-100 border border-slate-150 dark:border-slate-850"
-              placeholder="ابحث عن وجبة أو شراب في الـ QR..."
+              className={`w-full bg-slate-100 dark:bg-slate-800 focus:bg-white dark:focus:bg-slate-950 px-9 py-2.5 rounded-xl outline-none text-xs text-slate-800 dark:text-slate-100 border border-slate-150 dark:border-slate-850 ${lang === 'ar' ? 'text-right' : 'text-left'}`}
+              placeholder={t.searchPlaceholder}
             />
           </div>
         </div>
@@ -453,18 +740,20 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding }: MenuView
         <div className="sticky top-12 z-25 bg-white dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800 px-4 py-2.5 overflow-x-auto whitespace-nowrap scrollbar-none flex gap-2">
           <button
             onClick={() => setSelectedCategory('all')}
-            className={`px-3 py-1.5 rounded-full text-[11px] font-black transition cursor-pointer select-none ${selectedCategory === 'all' ? 'bg-amber-500 text-white shadow-md shadow-amber-500/10' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'}`}
+            className={`px-3 py-1.5 rounded-full text-[11px] font-black transition cursor-pointer select-none ${selectedCategory === 'all' ? `${bgClass} text-white ${shadowClass}` : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'}`}
+            style={selectedCategory === 'all' ? bgStyle : {}}
           >
-            كل المأكولات 🍽️
+            {t.allCategories}
           </button>
 
           {activeCategories.map((cat) => (
             <button
               key={cat.id}
               onClick={() => setSelectedCategory(cat.id)}
-              className={`px-3 py-1.5 rounded-full text-[11px] font-black transition cursor-pointer select-none ${selectedCategory === cat.id ? 'bg-amber-500 text-white shadow-md shadow-amber-500/10' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'}`}
+              className={`px-3 py-1.5 rounded-full text-[11px] font-black transition cursor-pointer select-none ${selectedCategory === cat.id ? `${bgClass} text-white ${shadowClass}` : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'}`}
+              style={selectedCategory === cat.id ? bgStyle : {}}
             >
-              {cat.name}
+              {lang === 'en' ? (cat.nameEn || cat.name) : cat.name}
             </button>
           ))}
         </div>
@@ -474,8 +763,8 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding }: MenuView
           {filteredProducts.length === 0 ? (
             <div className="text-center py-16 space-y-4">
               <ShoppingBag className="w-12 h-12 text-slate-300 mx-auto" />
-              <h5 className="text-sm font-bold text-slate-400">لا توجد منتجات مطابقة لعملية البحث</h5>
-              <p className="text-[11px] text-slate-500">جرب تصفح قسم آخر أو تعديل حقول البحث.</p>
+              <h5 className="text-sm font-bold text-slate-400">{t.notAvailableDesc}</h5>
+              <p className="text-[11px] text-slate-500">{t.notAvailablep}</p>
             </div>
           ) : (
             <div className="space-y-4">
@@ -486,15 +775,15 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding }: MenuView
                 >
                   {/* Photo part */}
                   <div className="w-24 h-24 shrink-0 rounded-xl overflow-hidden relative bg-slate-200">
-                    <img ssc={prod.image} src={prod.image} className="w-full h-full object-cover" alt={prod.name} referralpolicy="no-referrer" />
-                    {prod.badge && (
+                    <img ssc={prod.image} src={prod.image} className="w-full h-full object-cover" alt={lang === 'en' ? (prod.nameEn || prod.name) : prod.name} referralpolicy="no-referrer" />
+                    {(lang === 'en' ? (prod.badgeEn || prod.badge) : prod.badge) && (
                       <span className="absolute top-1 right-1 bg-rose-600 text-white text-[8px] font-bold px-1.5 py-0.5 rounded-full shadow-md scale-95">
-                        {prod.badge}
+                        {lang === 'en' ? (prod.badgeEn || prod.badge) : prod.badge}
                       </span>
                     )}
                     {!prod.isAvailable && (
                       <div className="absolute inset-0 bg-slate-950/70 text-slate-300 flex items-center justify-center text-[9px] font-bold text-center p-1">
-                        انتهى اليوم
+                        {t.closedToday}
                       </div>
                     )}
                   </div>
@@ -503,34 +792,35 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding }: MenuView
                   <div className="flex-1 flex flex-col justify-between">
                     <div>
                       <div className="flex justify-between items-start gap-1">
-                        <h4 className="font-bold text-slate-900 dark:text-slate-100 text-xs sm:text-sm line-clamp-1">{prod.name}</h4>
-                        <div className="text-xs font-black text-amber-600 dark:text-amber-400 font-mono shrink-0">
+                        <h4 className={`font-bold text-slate-900 dark:text-slate-100 text-xs sm:text-sm line-clamp-1 ${lang === 'en' ? 'text-left' : 'text-right'}`}>{lang === 'en' ? (prod.nameEn || prod.name) : prod.name}</h4>
+                        <div className={`text-xs font-black font-mono shrink-0 ${textClass}`} style={textStyle}>
                           {prod.isDiscounted && prod.discountPrice ? (
-                            <div className="flex flex-col text-left">
-                              <span>{prod.discountPrice} {restaurant.currency}</span>
+                            <div className={`${lang === 'en' ? 'text-right' : 'text-left'} flex flex-col`}>
+                              <span>{prod.discountPrice} {t.currencySymbol}</span>
                               <span className="text-[9px] text-slate-400 line-through font-normal leading-none">{prod.price}</span>
                             </div>
                           ) : (
-                            <span>{prod.price} {restaurant.currency}</span>
+                            <span>{prod.price} {t.currencySymbol}</span>
                           )}
                         </div>
                       </div>
-                      <p className="text-[10px] text-slate-500 dark:text-slate-400 line-clamp-2 leading-relaxed mt-1">
-                        {prod.description || 'وجبة طازجة مجهزة بمطابخنا الفاخرة.'}
+                      <p className={`text-[10px] text-slate-500 dark:text-slate-400 line-clamp-2 leading-relaxed mt-1 ${lang === 'en' ? 'text-left' : 'text-right'}`}>
+                        {lang === 'en' ? (prod.descriptionEn || prod.description || 'Fresh dish prepared in our premium kitchen.') : (prod.description || 'وجبة طازجة مجهزة بمطابخنا الفاخرة.')}
                       </p>
                     </div>
 
-                    <div className="flex justify-end pt-1">
+                    <div className={`flex ${lang === 'en' ? 'justify-start' : 'justify-end'} pt-1`}>
                       {prod.isAvailable ? (
                         <button
                           onClick={() => addToCart(prod)}
-                          className="bg-amber-500/10 hover:bg-amber-500 text-amber-700 hover:text-white border border-amber-500/20 rounded-lg px-2.5 py-1 text-[9px] font-extrabold transition cursor-pointer select-none"
+                          className={`rounded-lg px-2.5 py-1 text-[9px] font-extrabold transition cursor-pointer select-none border ${bgLightClass} ${hoverBgClass} ${textClass} hover:text-white ${borderLightClass}`}
+                          style={customColor ? { color: customColor, borderColor: `${customColor}25`, backgroundColor: `${customColor}12` } : {}}
                         >
-                          إضافة للسلة +
+                          {t.addToCart}
                         </button>
                       ) : (
                         <span className="text-[9px] text-slate-400 bg-slate-200 dark:bg-slate-800 px-2 py-0.5 rounded-lg select-none">
-                          غير متوفر ❌
+                          {t.noAvailable}
                         </span>
                       )}
                     </div>
@@ -550,7 +840,7 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding }: MenuView
               exit={{ y: 50, opacity: 0 }}
               className="sticky bottom-0 left-0 right-0 p-4 bg-white dark:bg-slate-900 border-t border-slate-150 dark:border-slate-800 shadow-2xl z-25 flex items-center justify-between"
             >
-              <div className="flex items-center gap-2">
+              <div className={`flex items-center gap-2 ${lang === 'en' ? 'flex-row' : 'flex-row-reverse'}`}>
                 <div className="relative">
                   <span className="absolute -top-1.5 -right-1.5 bg-rose-600 text-white rounded-full w-5 h-5 flex items-center justify-center font-bold font-mono text-[10px]">
                     {totalCartCount}
@@ -560,10 +850,10 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding }: MenuView
                   </div>
                 </div>
 
-                <div className="text-right">
-                  <h5 className="text-[10px] text-slate-400 font-bold uppercase">إجمالي السلة ✅</h5>
-                  <p className="text-sm font-black text-amber-600 dark:text-amber-400 font-mono">
-                    {getCartTotal()} {restaurant.currency}
+                <div className={lang === 'en' ? 'text-left' : 'text-right'}>
+                  <h5 className="text-[10px] text-slate-400 font-bold uppercase">{t.orderPrice}</h5>
+                  <p className={`text-sm font-black font-mono ${textClass}`} style={textStyle}>
+                    {getCartTotal()} {t.currencySymbol}
                   </p>
                 </div>
               </div>
@@ -572,7 +862,7 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding }: MenuView
                 onClick={() => setIsCartOpen(true)}
                 className="bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 px-5 font-black rounded-xl text-xs sm:text-sm shadow-md transition cursor-pointer flex items-center gap-1.5 select-none"
               >
-                تحديث الطلب ومراجعته 📱
+                {t.updatingCart}
               </button>
             </motion.div>
           )}
@@ -594,26 +884,26 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding }: MenuView
                 <X className="w-4 h-4" />
               </button>
 
-              <h3 className="text-base font-black text-slate-950 dark:text-white mb-4 mt-1 flex items-center gap-2">
-                <ShoppingBag className="w-5 h-5 text-amber-500" />
-                سلة المأكولات والمقبلات (الـ QR)
+              <h3 className={`text-base font-black text-slate-950 dark:text-white mb-4 mt-1 flex items-center gap-2 ${lang === 'en' ? 'flex-row' : 'flex-row-reverse'}`}>
+                <ShoppingBag className={`w-5 h-5 ${textClass}`} style={textStyle} />
+                <span>{t.cartTitle}</span>
               </h3>
 
               {/* Items List scroll */}
               <div className="flex-1 overflow-y-auto space-y-3.5 pr-1 max-h-[300px] min-h-[140px] border-b border-slate-100 dark:border-slate-850 pb-4">
                 {cart.length === 0 ? (
-                  <p className="text-center text-xs text-slate-500 py-10">السلة فارغة حالياً. أضف وجباتك لتسهيل تجهيز المطبخ!</p>
+                  <p className="text-center text-xs text-slate-500 py-10">{t.emptyCart}</p>
                 ) : (
                   cart.map((item) => {
                     const price = item.product.isDiscounted && item.product.discountPrice 
                       ? item.product.discountPrice 
                       : item.product.price;
                     return (
-                      <div key={item.product.id} className="flex justify-between items-center gap-3">
-                        <div className="flex-1 text-right">
-                          <h4 className="text-xs font-bold text-slate-900 dark:text-white line-clamp-1">{item.product.name}</h4>
-                          <span className="text-[10px] text-amber-600 dark:text-amber-400 font-semibold font-mono">
-                            {price * item.quantity} {restaurant.currency}
+                      <div key={item.product.id} className={`flex justify-between items-center gap-3 ${lang === 'en' ? 'flex-row-reverse' : 'flex-row'}`}>
+                        <div className={`flex-1 ${lang === 'en' ? 'text-left' : 'text-right'}`}>
+                          <h4 className="text-xs font-bold text-slate-900 dark:text-white line-clamp-1">{lang === 'en' ? (item.product.nameEn || item.product.name) : item.product.name}</h4>
+                          <span className={`text-[10px] font-semibold font-mono ${textClass}`} style={textStyle}>
+                            {price * item.quantity} {t.currencySymbol}
                           </span>
                         </div>
 
@@ -651,26 +941,26 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding }: MenuView
               {/* Checkout Credentials inputs */}
               <div className="py-4 space-y-3.5">
                 <div>
-                  <label className="block text-[10px] sm:text-xs font-extrabold text-slate-700 dark:text-slate-350 mb-1.5 text-right">
-                    رقم أو كود طاولة الجلوس / اسم الزبون 🛎️ *
+                  <label className={`block text-[10px] sm:text-xs font-extrabold text-slate-700 dark:text-slate-350 mb-1.5 ${lang === 'en' ? 'text-left' : 'text-right'}`}>
+                    {t.tableNameLabel}
                   </label>
                   <input 
                     type="text" 
                     required
                     value={tableNameInput}
                     onChange={(e) => setTableNameInput(e.target.value)}
-                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-750 focus:border-amber-500 focus:bg-white dark:focus:bg-slate-950 outline-none rounded-xl p-2.5 text-xs text-right text-slate-800 dark:text-slate-100"
-                    placeholder="طاولة رقم #4 أو سفري عائلي"
+                    className={`w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-750 focus:border-amber-500 focus:bg-white dark:focus:bg-slate-950 outline-none rounded-xl p-2.5 text-xs text-slate-800 dark:text-slate-100 ${lang === 'en' ? 'text-left' : 'text-right'}`}
+                    placeholder={t.tableNamePlaceholder}
                   />
                 </div>
 
                 <div>
-                  <label className="block text-[10px] sm:text-xs font-extrabold text-slate-700 dark:text-slate-350 mb-1.5 text-right flex justify-between items-center select-none">
-                    <span>إرشادات المطبخ أو بهارات خاصة للوجبة (اختياري)</span>
+                  <label className={`block text-[10px] sm:text-xs font-extrabold text-slate-700 dark:text-slate-350 mb-1.5 flex justify-between items-center select-none ${lang === 'en' ? 'flex-row-reverse' : 'flex-row'}`}>
+                    <span>{t.notesLabel}</span>
                     {getCartSuggestions().length > 0 && (
-                      <span className="text-[9px] font-black text-amber-600 dark:text-amber-400 bg-amber-500/10 dark:bg-amber-400/10 px-2 py-0.5 rounded-full flex items-center gap-1">
+                      <span className={`text-[9px] font-black px-2 py-0.5 rounded-full flex items-center gap-1 ${textClass} ${bgLightClass}`} style={badgeStyle}>
                         <Sparkles className="w-2.5 h-2.5 animate-pulse" />
-                        توصيات ذكية ✨
+                        {t.smartRecommendations}
                       </span>
                     )}
                   </label>
@@ -678,14 +968,14 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding }: MenuView
                     type="text" 
                     value={checkoutNotes}
                     onChange={(e) => setCheckoutNotes(e.target.value)}
-                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-750 focus:border-amber-500 focus:bg-white dark:focus:bg-slate-950 outline-none rounded-xl p-2.5 text-xs text-right text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500"
-                    placeholder="مثال: بدون مايونيز، صوص زيادة..."
+                    className={`w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-750 focus:border-amber-500 focus:bg-white dark:focus:bg-slate-950 outline-none rounded-xl p-2.5 text-xs text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 ${lang === 'en' ? 'text-left' : 'text-right'}`}
+                    placeholder={t.notesPlaceholder}
                   />
 
                   {/* Smart Suggestions Auto-Complete Pills */}
                   {getCartSuggestions().length > 0 && (
-                    <div className="mt-2 text-right">
-                      <div className="flex flex-wrap gap-1.5 justify-start">
+                    <div className={`mt-2 ${lang === 'en' ? 'text-left' : 'text-right'}`}>
+                      <div className={`flex flex-wrap gap-1.5 ${lang === 'en' ? 'justify-end' : 'justify-start'}`}>
                         {getCartSuggestions()
                           .filter(suggestion => {
                             const notesNormalized = checkoutNotes.toLowerCase();
@@ -733,7 +1023,8 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding }: MenuView
                                   }
                                 }
                               }}
-                              className="text-[10px] sm:text-[11px] font-black px-2.5 py-1 rounded-lg bg-amber-500/5 hover:bg-amber-500 border border-amber-500/10 hover:border-amber-500 dark:bg-amber-400/5 dark:hover:bg-amber-500 text-slate-700 dark:text-slate-350 hover:text-white dark:hover:text-white transition duration-150 cursor-pointer select-none"
+                              className={`text-[10px] sm:text-[11px] font-black px-2.5 py-1 rounded-lg border transition duration-150 cursor-pointer select-none ${bgLightClass} ${hoverBgClass} ${textClass} hover:text-white ${borderLightClass}`}
+                              style={customColor ? { color: customColor, borderColor: `${customColor}25`, backgroundColor: `${customColor}11` } : {}}
                             >
                               + {suggestion.text}
                             </button>
@@ -747,9 +1038,9 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding }: MenuView
 
               {/* Final dispatch checkout trigger block */}
               <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-3">
-                <div className="flex justify-between items-center text-xs sm:text-sm font-black dark:text-white font-mono">
-                  <span>إجمالي الحساب الفاتورة:</span>
-                  <span className="text-amber-600 dark:text-amber-400">{getCartTotal()} {restaurant.currency}</span>
+                <div className={`flex justify-between items-center text-xs sm:text-sm font-black dark:text-white font-mono ${lang === 'en' ? 'flex-row-reverse' : 'flex-row'}`}>
+                  <span>{t.invoiceTitle}</span>
+                  <span className={`${textClass}`} style={textStyle}>{getCartTotal()} {t.currencySymbol}</span>
                 </div>
 
                 <button
@@ -758,16 +1049,35 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding }: MenuView
                   className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black py-3 px-4 rounded-xl text-xs sm:text-sm cursor-pointer disabled:opacity-50 transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/10"
                 >
                   <MessageSquare className="w-5 h-5 fill-white" />
-                  إرسال الطلب عبر الواتس اب 💬
+                  {t.submitOrder}
                 </button>
 
                 <p className="text-[9px] text-center text-slate-450 dark:text-slate-400">
-                  سيتم تجهيز طلبك في المطبخ وتحويلك لتستلم تفاصيل الفاتورة على الواتساب مع العاملين بالصالة.
+                  {t.checkoutWarning}
                 </p>
               </div>
 
             </motion.div>
           </div>
+        )}
+
+        {/* Floating WhatsApp contact connection button */}
+        {restaurant.phoneNumber && (
+          <motion.a
+            initial={{ scale: 0, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ delay: 0.5 }}
+            href={`https://wa.me/${restaurant.phoneNumber.replace('+', '').replace(/\s+/g, '')}`}
+            target="_blank"
+            rel="noreferrer"
+            title="تواصل مباشرة عبر واتساب"
+            className={`absolute z-20 flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white shadow-xl shadow-emerald-500/30 transition-all hover:scale-105 active:scale-95 duration-200 ${
+              cart.length > 0 ? 'bottom-24 left-4' : 'bottom-6 left-4'
+            }`}
+          >
+            <MessageCircle className="w-4 h-4 fill-white" />
+            <span className="text-[10px] font-black pl-1">{t.chatRestaurant}</span>
+          </motion.a>
         )}
         
         {/* Dynamic Toast feedback */}

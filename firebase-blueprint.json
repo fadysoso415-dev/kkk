@@ -18,7 +18,10 @@
         "welcomeSubtitle": { "type": "string", "description": "Landing banner brief description" },
         "viewsCount": { "type": "integer", "description": "Total views for the restaurant menu" },
         "whatsappOrdersCount": { "type": "integer", "description": "Total clicks to send WhatsApp order" },
-        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp when the restaurant settings were created" }
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp when the restaurant settings were created" },
+        "primaryColor": { "type": "string", "description": "Hex or CSS color for buttons and highlights" },
+        "backgroundColor": { "type": "string", "description": "Hex or CSS color for background" },
+        "themePreset": { "type": "string", "enum": ["amber", "emerald", "rose", "indigo", "slate", "violet", "dark", "autumn", "coffee"], "description": "Active color theme preset name" }
       },
       "required": ["ownerUid", "slug", "name", "phoneNumber", "currency", "subscriptionType"]
     },
@@ -51,6 +54,43 @@
         "order": { "type": "integer", "description": "Sorting priority number within category" }
       },
       "required": ["name", "price", "categoryId", "isAvailable", "order"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "WhatsApp order details stored for analytics and tracking.",
+      "type": "object",
+      "properties": {
+        "tableName": { "type": "string", "description": "Customer name or table number" },
+        "totalPrice": { "type": "number", "description": "Total checkout price" },
+        "notes": { "type": "string", "description": "Customer comments or requests" },
+        "timestamp": { "type": "string", "format": "date-time", "description": "Order creation timestamp" },
+        "items": {
+          "type": "array",
+          "description": "List of ordered products",
+          "items": {
+            "type": "object",
+            "properties": {
+              "productId": { "type": "string" },
+              "name": { "type": "string" },
+              "price": { "type": "number" },
+              "quantity": { "type": "integer" }
+            }
+          }
+        }
+      },
+      "required": ["tableName", "totalPrice", "timestamp", "items"]
+    },
+    "ViewLog": {
+      "title": "ViewLog",
+      "description": "Log of customer visits to the digital menu.",
+      "type": "object",
+      "properties": {
+        "timestamp": { "type": "string", "format": "date-time", "description": "Visit timestamp as ISO String" },
+        "device": { "type": "string", "enum": ["iPhone", "Android", "Desktop", "Other"] },
+        "userAgent": { "type": "string" },
+        "referrer": { "type": "string" }
+      },
+      "required": ["timestamp", "device"]
     }
   },
   "firestore": {
@@ -65,6 +105,14 @@
     "/restaurants/{restaurantId}/products/{productId}": {
       "schema": "Product",
       "description": "Products subcollection reflecting individual dishes/items"
+    },
+    "/restaurants/{restaurantId}/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Subcollection tracking WhatsApp menu checkout orders"
+    },
+    "/restaurants/{restaurantId}/views_log/{viewId}": {
+      "schema": "ViewLog",
+      "description": "Subcollection tracking individual customer menu view statistics"
     }
   }
 }
