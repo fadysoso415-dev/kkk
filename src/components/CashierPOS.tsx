@@ -52,6 +52,7 @@ export default function CashierPOS({ restaurant, categories, products, onSaveOrd
   const [discountAmount, setDiscountAmount] = useState<number>(0);
   const [includeTax, setIncludeTax] = useState<boolean>(true);
   const [cashierNotes, setCashierNotes] = useState<string>('');
+  const [autoPrintEnabled, setAutoPrintEnabled] = useState<boolean>(true);
   
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [receiptUrl, setReceiptUrl] = useState<string | null>(null);
@@ -144,6 +145,59 @@ export default function CashierPOS({ restaurant, categories, products, onSaveOrd
     printReceiptClassic(restaurant, { ...order, id: dbOrderId }, { lang });
   };
 
+  // Keyboard Shortcuts System for direct quick checkout actions
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Support Ctrl or Cmd (metaKey)
+      const isModifier = e.ctrlKey || e.metaKey;
+      if (isModifier) {
+        if (e.key.toLowerCase() === 'p') {
+          e.preventDefault();
+          if (successOrder) {
+            printReceipt(successOrder, successOrder.id);
+            setSuccessOrder(null);
+          } else if (cart.length > 0 && !isSubmitting) {
+            handleCheckout();
+          }
+        } else if (e.key.toLowerCase() === 'n') {
+          e.preventDefault();
+          if (successOrder) {
+            setSuccessOrder(null);
+          } else {
+            clearCart();
+          }
+        } else if (e.key.toLowerCase() === 'q') {
+          e.preventDefault();
+          clearCart();
+        }
+      } else {
+        if (e.key === 'Escape') {
+          if (successOrder) {
+            setSuccessOrder(null);
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [
+    cart,
+    successOrder,
+    isSubmitting,
+    autoPrintEnabled,
+    tableName,
+    orderType,
+    paymentMethod,
+    discountAmount,
+    includeTax,
+    cashierNotes,
+    totalPrice,
+    taxAmount
+  ]);
+
   const handleCheckout = async () => {
     if (cart.length === 0) return;
     setIsSubmitting(true);
@@ -190,8 +244,10 @@ export default function CashierPOS({ restaurant, categories, products, onSaveOrd
       const successObj = { id: orderId, ...payload };
       setSuccessOrder(successObj);
 
-      // Trigger standard thermal report layout print window
-      printReceipt(successObj, orderId);
+      // Trigger standard thermal report layout print window if enabled
+      if (autoPrintEnabled) {
+        printReceipt(successObj, orderId);
+      }
       
       // Flash clean POS board state
       setCart([]);
@@ -234,6 +290,54 @@ export default function CashierPOS({ restaurant, categories, products, onSaveOrd
           <div className="flex items-center gap-2 bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 self-stretch sm:self-auto justify-center">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
             <span className="text-[10px] font-bold text-slate-300">نقطة الكاشير نشطة ومربوطة بالحسابات</span>
+          </div>
+        </div>
+
+        {/* Quick Settings Bar with Auto-Print toggles & Keyboard shortcuts */}
+        <div className="bg-white border border-slate-200/80 p-4 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4 text-right shadow-sm">
+          <div className="flex items-center gap-2 text-slate-800 font-extrabold text-xs">
+            <Sliders className="w-4 h-4 text-amber-500 animate-pulse" />
+            <span>إعدادات لوحة المبيعات السريعة والتحكم ⚙️</span>
+          </div>
+          
+          <div className="flex flex-wrap items-center gap-4 w-full md:w-auto">
+            {/* Auto Print Toggle Switch */}
+            <label className="flex items-center gap-2.5 cursor-pointer select-none">
+              <div className="relative">
+                <input
+                  type="checkbox"
+                  checked={autoPrintEnabled}
+                  onChange={(e) => setAutoPrintEnabled(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:bg-emerald-500 relative transition-colors duration-200">
+                  <div className={`absolute top-[2px] w-4 h-4 rounded-full bg-white transition-all duration-200 ${autoPrintEnabled ? 'right-[2px]' : 'right-[18px]'}`} />
+                </div>
+              </div>
+              <span className="text-[11px] font-extrabold text-slate-700 flex items-center gap-1">
+                الطباعة التلقائية فور إنهاء الطلب 🖨️✨
+              </span>
+            </label>
+
+            {/* Division Line */}
+            <div className="hidden sm:block w-[1px] h-4 bg-slate-200" />
+
+            {/* Interactive shortcuts legend */}
+            <div className="flex items-center flex-wrap gap-2 text-[10px] font-bold text-slate-500 bg-slate-50 border border-slate-100 rounded-lg px-2.5 py-1.5">
+              <span className="text-slate-700 font-extrabold shrink-0">⌨️ اختصارات سريعة:</span>
+              <div className="flex items-center gap-1">
+                <kbd className="bg-white border border-slate-200 shadow-xs rounded px-1 font-mono text-[9px] text-slate-600">Ctrl+P</kbd>
+                <span className="text-[9px] text-slate-500">حفظ وطباعة</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <kbd className="bg-white border border-slate-200 shadow-xs rounded px-1 font-mono text-[9px] text-slate-600">Ctrl+N</kbd>
+                <span className="text-[9px] text-slate-500">فاتورة جديدة</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <kbd className="bg-white border border-slate-200 shadow-xs rounded px-1 font-mono text-[9px] text-slate-600">Ctrl+Q</kbd>
+                <span className="text-[9px] text-slate-500">تصفير</span>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -659,12 +763,12 @@ export default function CashierPOS({ restaurant, categories, products, onSaveOrd
                   {isSubmitting ? (
                     <>
                       <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      <span>جاري طبع وحفظ الطلب...</span>
+                      <span>{autoPrintEnabled ? 'جاري الحفظ وطباعة الفاتورة...' : 'جاري حفظ الطلب بالداتا...'}</span>
                     </>
                   ) : (
                     <>
                       <Printer className="w-4 h-4" />
-                      <span>تسجيل الطلب وطباعة الفاتورة 🖨️</span>
+                      <span>{autoPrintEnabled ? 'إنهاء الطلب وطباعة الإيصال 🖨️' : 'إنهاء طلب الكاشير وحفظ الفاتورة 💾'}</span>
                     </>
                   )}
                 </button>
@@ -805,7 +909,7 @@ export default function CashierPOS({ restaurant, categories, products, onSaveOrd
                   className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black py-3.5 rounded-2xl transition duration-150 flex items-center justify-center gap-2 text-xs shadow-lg shadow-emerald-650/15 cursor-pointer"
                 >
                   <Printer className="w-4 h-4" />
-                  <span>طباعة وبدء فاتورة جديدة 🖨️✨</span>
+                  <span>طباعة وبدء فاتورة جديدة 🖨️✨ <kbd className="bg-emerald-700 text-[10px] px-1 rounded font-mono ml-1">Ctrl+P</kbd></span>
                 </button>
 
                 <div className="grid grid-cols-2 gap-2">
@@ -824,7 +928,7 @@ export default function CashierPOS({ restaurant, categories, products, onSaveOrd
                     onClick={() => setSuccessOrder(null)}
                     className="bg-slate-900 hover:bg-slate-950 text-white font-extrabold text-[10px] py-2.5 rounded-xl transition cursor-pointer"
                   >
-                    <span>فاتورة جديدة ➕</span>
+                    <span>فاتورة جديدة ➕ <kbd className="bg-slate-800 text-[9px] px-1 rounded font-mono ml-1">Ctrl+N</kbd></span>
                   </button>
                 </div>
               </div>
