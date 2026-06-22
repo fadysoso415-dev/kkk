@@ -28,6 +28,11 @@ export interface Restaurant {
   backgroundColor?: string;
   themePreset?: 'amber' | 'emerald' | 'rose' | 'indigo' | 'slate' | 'violet' | 'dark' | 'autumn' | 'coffee';
   enableEnglish?: boolean;
+  whatsappNumber?: string;
+  whatsappLinkType?: 'api' | 'web' | 'wa_me';
+  whatsappGreetingText?: string;
+  whatsappGreetingTextEn?: string;
+  whatsappUseCustomNumber?: boolean;
 }
 
 export interface Category {

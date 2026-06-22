@@ -707,9 +707,69 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding, lang: init
       return;
     }
 
+    // Pre-open a blank window synchronously inside user click to bypass browser pop-up blockers
+    let waWindow: Window | null = null;
+    try {
+      waWindow = window.open('about:blank', '_blank');
+      if (waWindow) {
+        waWindow.document.write(`
+          <html>
+            <head>
+              <title>جاري التوجيه للواتساب...</title>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <style>
+                body {
+                  background-color: #0f172a;
+                  color: #f59e0b;
+                  font-family: system-ui, -apple-system, sans-serif;
+                  display: flex;
+                  flex-direction: column;
+                  justify-content: center;
+                  align-items: center;
+                  height: 100vh;
+                  margin: 0;
+                  padding: 20px;
+                  box-sizing: border-box;
+                  text-align: center;
+                }
+                .spinner {
+                  width: 48px;
+                  height: 48px;
+                  border: 4px solid #f59e0b;
+                  border-top-color: transparent;
+                  border-radius: 50%;
+                  animation: spin 1s linear infinite;
+                  margin-bottom: 24px;
+                }
+                @keyframes spin {
+                  to { transform: rotate(360deg); }
+                }
+                .text {
+                  font-size: 14px;
+                  font-weight: 800;
+                  line-height: 1.6;
+                  max-width: 320px;
+                }
+              </style>
+            </head>
+            <body>
+              <div class="spinner"></div>
+              <div class="text">جاري تجهيز وتأمين طلبك للطباعة بالمطبخ، وإعادة توجيهك لواتساب المطعم لتأكيد العمل... 💬</div>
+            </body>
+          </html>
+        `);
+      }
+    } catch (e) {
+      console.warn("Could not pre-open window, will fallback to direct redirect", e);
+    }
+
     let text = "";
     if (lang === 'en') {
-      text = `*New Kitchen Order from Clients 🛎️*\n`;
+      if (restaurant.whatsappGreetingTextEn) {
+        text += `${restaurant.whatsappGreetingTextEn}\n\n`;
+      }
+      text += `*New Kitchen Order from Clients 🛎️*\n`;
       text += `*Table / Customer Name:* ${tableNameInput.trim()}\n`;
       if (checkoutNotes.trim()) {
         text += `*Notes:* ${checkoutNotes.trim()}\n`;
@@ -736,7 +796,10 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding, lang: init
       text += `*Total Order Value:* *${getCartTotal()} ${restaurant.currencyEn || restaurant.currency || 'EGP'}*\n\n`;
       text += `_Created via MenuClick Quick Digital Gateway_`;
     } else {
-      text = `*طلب جديد للمطبخ من مناديب الطاولات 🛎️*\n`;
+      if (restaurant.whatsappGreetingText) {
+        text += `${restaurant.whatsappGreetingText}\n\n`;
+      }
+      text += `*طلب جديد للمطبخ من مناديب الطاولات 🛎️*\n`;
       text += `*اسم الزبون / رقم الطاولة:* ${tableNameInput.trim()}\n`;
       if (checkoutNotes.trim()) {
         text += `*ملاحظات الزبون:* ${checkoutNotes.trim()}\n`;
@@ -837,9 +900,27 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding, lang: init
       : `🎉 Your order (${tableNameInput.trim()}) has been sent! Chef chimes triggered.`);
 
     // Redirect
-    const formattedPhone = restaurant.phoneNumber.replace('+', '').replace(/\s+/g, '');
-    const waUrl = `https://api.whatsapp.com/send?phone=${formattedPhone}&text=${encodeURIComponent(text)}`;
-    window.open(waUrl, '_blank');
+    const targetPhoneRaw = (restaurant.whatsappUseCustomNumber && restaurant.whatsappNumber)
+      ? restaurant.whatsappNumber
+      : restaurant.phoneNumber;
+    const formattedPhone = targetPhoneRaw.replace('+', '').replace(/\s+/g, '');
+    
+    let waUrl = `https://api.whatsapp.com/send?phone=${formattedPhone}&text=${encodeURIComponent(text)}`;
+    if (restaurant.whatsappLinkType === 'web') {
+      waUrl = `https://web.whatsapp.com/send?phone=${formattedPhone}&text=${encodeURIComponent(text)}`;
+    } else if (restaurant.whatsappLinkType === 'wa_me') {
+      waUrl = `https://wa.me/${formattedPhone}?text=${encodeURIComponent(text)}`;
+    }
+    
+    if (waWindow && !waWindow.closed) {
+      waWindow.location.href = waUrl;
+    } else {
+      try {
+        window.open(waUrl, '_blank');
+      } catch (err) {
+        window.location.href = waUrl;
+      }
+    }
   };
 
   if (loading) {

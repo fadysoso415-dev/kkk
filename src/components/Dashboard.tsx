@@ -212,6 +212,15 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
   const [aiError, setAiError] = useState<string | null>(null);
   const [showAiModal, setShowAiModal] = useState(false);
 
+  // Advanced WhatsApp Configuration Modal States
+  const [showWhatsappConfigModal, setShowWhatsappConfigModal] = useState(false);
+  const [waUseCustom, setWaUseCustom] = useState(false);
+  const [waPhoneVal, setWaPhoneVal] = useState('');
+  const [waLinkType, setWaLinkType] = useState<'api' | 'web' | 'wa_me'>('api');
+  const [waGreeting, setWaGreeting] = useState('');
+  const [waGreetingEn, setWaGreetingEn] = useState('');
+  const [isWaConfigSaving, setIsWaConfigSaving] = useState(false);
+
   const [loading, setLoading] = useState(true);
   const [alertMsg, setAlertMsg] = useState<{ type: 'success' | 'error', text: string } | null>(null);
   const [menuCopied, setMenuCopied] = useState(false);
@@ -1323,6 +1332,79 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
     });
   };
 
+  // --- ADVANCED WHATSAPP CONFIGURATION HELPERS ---
+  const handleOpenWhatsappConfig = () => {
+    setWaUseCustom(!!restaurant.whatsappUseCustomNumber);
+    setWaPhoneVal(restaurant.whatsappNumber || restaurant.phoneNumber || '');
+    setWaLinkType((restaurant.whatsappLinkType as 'api' | 'web' | 'wa_me') || 'api');
+    setWaGreeting(restaurant.whatsappGreetingText || '');
+    setWaGreetingEn(restaurant.whatsappGreetingTextEn || '');
+    setShowWhatsappConfigModal(true);
+  };
+
+  const modalMatchedCountry = COUNTRY_CODES.find(c => {
+    const plainPhone = waPhoneVal.replace('+', '').replace(/\s+/g, '');
+    const plainCode = c.code.replace('+', '');
+    return plainPhone.startsWith(plainCode);
+  }) || COUNTRY_CODES[0];
+
+  const modalLocalNumber = (() => {
+    if (!waPhoneVal) return '';
+    const plainPhone = waPhoneVal.replace('+', '').replace(/\s+/g, '');
+    const plainCode = modalMatchedCountry.code.replace('+', '');
+    if (plainPhone.startsWith(plainCode)) {
+      return plainPhone.substring(plainCode.length);
+    }
+    return waPhoneVal;
+  })();
+
+  const handleModalCountryChange = (newCode: string) => {
+    const digitsOnly = modalLocalNumber.replace(/[^\d]/g, '').replace(/^[0]+/, '');
+    setWaPhoneVal(newCode + digitsOnly);
+  };
+
+  const handleModalLocalDigitsChange = (newLocal: string) => {
+    const digitsOnly = newLocal.replace(/[^\d]/g, '');
+    setWaPhoneVal(modalMatchedCountry.code + digitsOnly);
+  };
+
+  const handleSaveWhatsappConfig = async () => {
+    if (waUseCustom) {
+      const digitsOnly = waPhoneVal.replace(/[^\d]/g, '');
+      if (!digitsOnly) {
+        triggerAlert('error', lang === 'ar' ? 'يرجى كتابة رقم الواتساب المخصص أو إلغاء تفعيله!' : 'Please enter the custom WhatsApp number or disable it!');
+        return;
+      }
+    }
+
+    const updatedRestaurant: Restaurant = {
+      ...restaurant,
+      whatsappUseCustomNumber: waUseCustom,
+      whatsappNumber: waPhoneVal,
+      whatsappLinkType: waLinkType,
+      whatsappGreetingText: waGreeting,
+      whatsappGreetingTextEn: waGreetingEn
+    };
+
+    setIsWaConfigSaving(true);
+    try {
+      if (isDemo) {
+        setRestaurant(updatedRestaurant);
+        triggerAlert('success', lang === 'ar' ? 'تم حفظ وتخصيص رابط الواتساب بنجاح! (وضع تجريبي)' : 'WhatsApp redirect customization saved successfully! (Demo Mode)');
+      } else {
+        await saveRestaurant(restaurant.id, updatedRestaurant);
+        setRestaurant(updatedRestaurant);
+        triggerAlert('success', lang === 'ar' ? 'تم حفظ وتخصيص إعدادات رابط الواتساب ونشرها فوراً للزبائن! 🚀✨' : 'WhatsApp redirect customization successfully saved and deployed live! 🚀✨');
+      }
+      setShowWhatsappConfigModal(false);
+    } catch (err: any) {
+      console.error(err);
+      triggerAlert('error', lang === 'ar' ? 'فشل التحديث، يرجى المحاولة لاحقاً.' : 'Failed to save modifications.');
+    } finally {
+      setIsWaConfigSaving(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="w-full min-h-screen bg-slate-900 text-amber-500 font-sans flex flex-col justify-center items-center gap-4" dir="rtl">
@@ -1792,6 +1874,43 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
                 <span className="text-[10px] text-slate-400 mt-1 block">
                   اختر رمز الدولة من القائمة المنسدلة واكتب باقي الرقم بدون صفر في البداية.
                 </span>
+                
+                {/* Real-time WhatsApp Link Verification & Testing Tool */}
+                <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const digitsOnly = localNumber.replace(/[^\d]/g, '');
+                      if (!digitsOnly) {
+                        alert(lang === 'ar' ? 'يرجى كتابة رقم الهاتف أولاً لاختبار الربط!' : 'Please enter a phone number first!');
+                        return;
+                      }
+                      const formattedPhone = (matchedCountry.code + digitsOnly).replace('+', '').replace(/\s+/g, '');
+                      const testText = lang === 'ar'
+                        ? `*تجربة ربط منيو كليك بنجاح 📲*\nمرحباً! هذا اختبار سريع لتأكيد عمل ربط الواتساب مع النظام بشكل حي ومباشر بنسبة %100. 🚀`
+                        : `*MenuClick WhatsApp Test Successful 📲*\nHello! This is an instant test message confirming that your WhatsApp connection works perfectly. 🚀`;
+                      
+                      const url = `https://api.whatsapp.com/send?phone=${formattedPhone}&text=${encodeURIComponent(testText)}`;
+                      window.open(url, '_blank');
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 hover:border-emerald-300 rounded-lg text-[10px] font-black cursor-pointer transition select-none"
+                  >
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                    </span>
+                    <span>تحقق من الربط مع واتساب بـرسالة تجريبية 📲</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleOpenWhatsappConfig}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-850 text-white border border-slate-800 rounded-lg text-[10px] font-bold cursor-pointer transition select-none shadow-sm"
+                  >
+                    <Settings className="w-3.5 h-3.5" />
+                    <span>تخصيص وتأكيد رابط الواتساب ⚙️💬</span>
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -4782,6 +4901,234 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
             <div className="bg-slate-50 p-4 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400 font-sans shrink-0">
               <span>مدعوم بواسطة طرازات Google Gemini 3.5 فائقة القوة</span>
               <span>منيو كليك الذكي 🖥️</span>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* WhatsApp Advanced Connection Configuration Modal */}
+      {showWhatsappConfigModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 15 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            className="bg-white w-full max-w-2xl rounded-3xl shadow-2xl border border-slate-100 overflow-hidden flex flex-col my-8 max-h-[90vh]"
+          >
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-emerald-600 to-teal-850 p-6 text-white flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="p-2 border border-white/20 bg-white/10 rounded-2xl">
+                  <MessageSquare className="w-5 h-5 text-emerald-100" />
+                </div>
+                <div>
+                  <h3 className="text-xs sm:text-sm font-black text-white">إعدادات رابط الواتساب والطلب المتقدمة ⚙️💬</h3>
+                  <p className="text-[10px] text-emerald-100">قم بتخصيص رقم الاستقبال، وتصميم صيغة الرابط، والمقدمة لرسائل الطلبات</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowWhatsappConfigModal(false)}
+                className="bg-white/10 hover:bg-white/20 text-white rounded-xl p-2 transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 overflow-y-auto space-y-6 font-sans text-right" dir="rtl">
+              
+              {/* Option 1: Separate Custom Number */}
+              <div className="bg-slate-50 border border-slate-200/50 p-4.5 rounded-2xl space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Smartphone className="w-4 h-4 text-emerald-600" />
+                    <span className="text-xs font-black text-slate-800">استقبال وتأكيد الطلبات على رقم واتساب مخصص 📲</span>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={waUseCustom}
+                      onChange={(e) => setWaUseCustom(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-slate-250 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:right-auto after:content-[''] after:absolute after:top-[2px] after:right-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600"></div>
+                  </label>
+                </div>
+                <p className="text-[10px] text-slate-500 leading-relaxed">
+                  بشكل افتراضي، يتم إعادة توجيه طلبات الوجبات والمشروبات لنفس رقم الهاتف المسجل للمطعم. فعل هذا الخيار لتخصيص رقم منفصل فقط لاستقبال رسائل الكومبو والطلبات (مثال: رقم الكاشير أو مدير الصالة المباشر).
+                </p>
+
+                {waUseCustom && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    className="pt-3 border-t border-slate-200/60"
+                  >
+                    <label className="block text-[10px] font-bold text-slate-700 mb-2">رقم هاتف الواتساب المخصص 💬</label>
+                    <div className="flex rounded-xl overflow-hidden border border-slate-200 bg-white shadow-sm focus-within:border-emerald-500 max-w-sm">
+                      {/* Country code selector */}
+                      <select
+                        value={modalMatchedCountry.code}
+                        onChange={(e) => handleModalCountryChange(e.target.value)}
+                        className="bg-slate-50 text-xs font-bold px-3 py-2.5 outline-none border-l border-slate-200 text-slate-800 cursor-pointer"
+                      >
+                        {COUNTRY_CODES.map((c) => (
+                          <option key={c.code} value={c.code}>
+                            {c.flag} {c.code}
+                          </option>
+                        ))}
+                      </select>
+                      {/* Local digit input */}
+                      <input
+                        type="disabled"
+                        value={modalLocalNumber}
+                        onChange={(e) => handleModalLocalDigitsChange(e.target.value)}
+                        className="flex-1 bg-transparent p-2.5 text-xs font-bold outline-none text-left"
+                        placeholder="1000000000"
+                        dir="ltr"
+                        required
+                      />
+                    </div>
+                    <span className="text-[9px] text-slate-400 mt-1 block">اكتب الرقم المخصص بدون كود الدولة وبدون الصفر الأول.</span>
+                  </motion.div>
+                )}
+              </div>
+
+              {/* Option 2: Redirect Link Type */}
+              <div className="space-y-2">
+                <label className="block text-xs font-bold text-slate-800">صيغة ونوع رابط إعادة التوجيه بالواتساب 🔗</label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {[
+                    { id: 'api', title: 'WhatsApp API', desc: 'متوافق مع كل الأجهزة', url: 'api.whatsapp.com' },
+                    { id: 'wa_me', title: 'wa.me الرابط السريع', desc: 'خفيف ومثالي للموبايل', url: 'wa.me/number' },
+                    { id: 'web', title: 'WhatsApp Web', desc: 'ممتع لأجهزة الكمبيوتر', url: 'web.whatsapp.com' }
+                  ].map((type) => (
+                    <button
+                      key={type.id}
+                      type="button"
+                      onClick={() => setWaLinkType(type.id as 'api' | 'web' | 'wa_me')}
+                      className={`p-3.5 rounded-2xl border text-right transition cursor-pointer flex flex-col gap-1 ${
+                        waLinkType === type.id
+                          ? 'border-emerald-500 bg-emerald-55/40 text-emerald-950'
+                          : 'border-slate-200 hover:border-slate-305 bg-white'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span className="text-xs font-extrabold">{type.title}</span>
+                        {waLinkType === type.id && <div className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />}
+                      </div>
+                      <span className="text-[10px] text-slate-450 leading-tight">{type.desc}</span>
+                      <span className="text-[9px] font-mono text-slate-400 mt-1 block select-none bg-slate-105/80 px-1.5 py-0.5 rounded self-start">{type.url}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Option 3: Custom Greeting / Prefix Msg */}
+              <div className="grid sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-bold text-slate-800">مقدمة الرسالة المخصصة (عربي) 📝</label>
+                  <textarea
+                    rows={3}
+                    value={waGreeting}
+                    onChange={(e) => setWaGreeting(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs outline-none focus:bg-white focus:border-emerald-500 placeholder:text-slate-405 resize-none leading-relaxed"
+                    placeholder="مثال: مرحباً بكم في مطعمنا! أريد إرسال طلب من الطاولة بالتفاصيل التالية:"
+                  />
+                  <span className="text-[9px] text-slate-400 block leading-normal">تظهر الرسالة في أعلى المحادثة بالواتساب للطلب قبل سرد الوجبات.</span>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-bold text-slate-800">مقدمة الرسالة المخصصة (English) 📝</label>
+                  <textarea
+                    rows={3}
+                    value={waGreetingEn}
+                    onChange={(e) => setWaGreetingEn(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs outline-none focus:bg-white focus:border-emerald-500 placeholder:text-slate-405 placeholder:text-right resize-none text-left leading-relaxed"
+                    dir="ltr"
+                    placeholder="e.g. Hello! Here is my food order from the table:"
+                  />
+                  <span className="text-[9px] text-slate-400 block leading-normal">English summary message prefix shown to users browsing in English interface.</span>
+                </div>
+              </div>
+
+              {/* Section 4: Testing & Link Preview */}
+              <div className="bg-emerald-50/45 border border-dashed border-emerald-200 p-4.5 rounded-2xl space-y-3">
+                <h4 className="text-[11px] font-black text-emerald-900 flex items-center gap-1.5">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                  <span>معاينة للرابط وبنية الإرسال المنتجة حياً 🕵️‍♂️🚀</span>
+                </h4>
+                
+                <div className="bg-white/80 border border-emerald-100 p-3 rounded-xl scale-100 select-all leading-relaxed whitespace-pre font-mono text-[9px] text-slate-600 break-all">
+                  <span className="font-extrabold text-emerald-800 font-sans block text-[10px] mb-1">الرابط المستخدم في التوجيه:</span>
+                  {(() => {
+                    const phone = (waUseCustom ? waPhoneVal : restaurant.phoneNumber).replace('+', '').replace(/\s+/g, '');
+                    const testText = waGreeting || (lang === 'ar' ? 'طلب تجريبي' : 'Test Order');
+                    let url = `https://api.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(testText)}`;
+                    if (waLinkType === 'web') url = `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(testText)}`;
+                    else if (waLinkType === 'wa_me') url = `https://wa.me/${phone}?text=${encodeURIComponent(testText)}`;
+                    return url;
+                  })()}
+                </div>
+
+                <div className="flex items-center justify-between gap-4 flex-wrap">
+                  <p className="text-[10px] text-emerald-800 leading-normal max-w-md">
+                    انقر فوق الزر للتأكد من عمل الرابط الذي قمت بإنشائه ومطابقته لرقم هاتفك:
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const phone = (waUseCustom ? waPhoneVal : restaurant.phoneNumber).replace('+', '').replace(/\s+/g, '');
+                      if (!phone) {
+                        alert(lang === 'ar' ? 'يرجى إدخال رقم واتساب صالح!' : 'Please enter a valid WhatsApp number!');
+                        return;
+                      }
+                      const testMsg = waGreeting || (lang === 'ar' 
+                        ? `*تجربة ربط وتأكيد العمل بنجاح 📲*\nلقد تم فحص ربط رابط الواتساب والرسائل الخاصة بالمطعم بنجاح بنسبة %100!`
+                        : `*WhatsApp redirect configuration verified successfully! 🚀*`);
+                      
+                      let url = `https://api.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(testMsg)}`;
+                      if (waLinkType === 'web') url = `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(testMsg)}`;
+                      else if (waLinkType === 'wa_me') url = `https://wa.me/${phone}?text=${encodeURIComponent(testMsg)}`;
+                      
+                      window.open(url, '_blank');
+                    }}
+                    className="bg-emerald-600 hover:bg-emerald-700 hover:scale-[1.01] active:scale-[0.99] text-white text-[10px] font-black px-4 py-2 rounded-xl transition cursor-pointer shadow-sm shadow-emerald-600/10 flex items-center justify-center gap-1.5 shrink-0"
+                  >
+                    <span>إرسال تجربة حية وتأكيد عمل الرابط 📲</span>
+                  </button>
+                </div>
+              </div>
+
+            </div>
+
+            {/* Modal Footer */}
+            <div className="bg-slate-50 p-4 border-t border-slate-100 flex items-center justify-end gap-2.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowWhatsappConfigModal(false)}
+                className="bg-slate-200 hover:bg-slate-250 text-slate-700 font-extrabold py-2 px-5 rounded-xl text-xs cursor-pointer transition"
+              >
+                إلغاء 🚫
+              </button>
+              <button
+                type="button"
+                disabled={isWaConfigSaving}
+                onClick={handleSaveWhatsappConfig}
+                className="bg-slate-900 hover:bg-emerald-600 hover:text-white text-white font-extrabold py-2 px-6 rounded-xl text-xs cursor-pointer transition flex items-center justify-center gap-1.5 disabled:opacity-50"
+              >
+                {isWaConfigSaving ? (
+                  <>
+                    <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>جاري تفعيل الإعدادات...</span>
+                  </>
+                ) : (
+                  <span>تأكيد العمل وحفظ التعديلات 💾✨</span>
+                )}
+              </button>
             </div>
           </motion.div>
         </div>
