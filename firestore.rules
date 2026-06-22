@@ -30,7 +30,8 @@ service cloud.firestore {
         (restaurantId.startsWith('rest-') && 
          restaurantId.split('rest-').size() > 1 && 
          request.auth.uid.startsWith(restaurantId.split('rest-')[1])) ||
-        get(/databases/$(database)/documents/restaurants/$(restaurantId)).data.ownerUid == request.auth.uid
+        (exists(/databases/$(database)/documents/restaurants/$(restaurantId)) &&
+         get(/databases/$(database)/documents/restaurants/$(restaurantId)).data.ownerUid == request.auth.uid)
       );
     }
 
@@ -53,7 +54,7 @@ service cloud.firestore {
     function isValidCategory(data) {
       return data.name is string &&
              data.name.size() <= 100 &&
-             data.order is int &&
+             data.order is number &&
              data.isActive is bool;
     }
 
@@ -64,7 +65,7 @@ service cloud.firestore {
              data.categoryId is string &&
              data.categoryId.size() <= 128 &&
              data.isAvailable is bool &&
-             data.order is int;
+             data.order is number;
     }
 
     // -- paths and operations --
@@ -135,6 +136,12 @@ service cloud.firestore {
         allow create: if isValidId(viewId);
         // Only restaurant owner can read/write logs
         allow read, update, delete: if isOwnerOfRestaurant(restaurantId);
+      }
+
+      // shifts nested sub-collection
+      match /shifts/{shiftId} {
+        // Only restaurant owner can read/write logs
+        allow read, write: if isOwnerOfRestaurant(restaurantId);
       }
     }
   }

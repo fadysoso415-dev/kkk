@@ -38,6 +38,13 @@ export interface Category {
   isActive: boolean;
 }
 
+export interface ProductSize {
+  id: string;
+  name: string;
+  nameEn?: string;
+  priceAdded: number; // extra cost added to base price
+}
+
 export interface Product {
   id: string;
   name: string;
@@ -54,12 +61,16 @@ export interface Product {
   badge?: string; // e.g., "HOT", "NEW", "MUST_TRY"
   badgeEn?: string;
   order: number;
+  discountLabel?: string;
+  discountExpiry?: string;
+  sizes?: ProductSize[];
 }
 
 export interface CartItem {
   product: Product;
   quantity: number;
   notes?: string;
+  selectedSize?: ProductSize;
 }
 
 export interface ContactMessage {
@@ -75,6 +86,7 @@ export interface OrderItem {
   name: string;
   price: number;
   quantity: number;
+  size?: string; // selected size name
 }
 
 export interface Order {
@@ -86,6 +98,8 @@ export interface Order {
   timestamp: string; // ISO string timestamps
   createdAt: string;
   status?: 'pending' | 'preparing' | 'completed';
+  isSettled?: boolean;
+  settledAt?: string;
 }
 
 export interface ViewLog {
@@ -94,4 +108,14 @@ export interface ViewLog {
   device: 'iPhone' | 'Android' | 'Desktop' | 'Other';
   userAgent: string;
   referrer: string;
+}
+
+export interface Shift {
+  id?: string;
+  closedAt: string;
+  totalOrders: number;
+  totalSales: number;
+  settledSales: number;
+  unsettledSales: number;
+  employeeName?: string;
 }

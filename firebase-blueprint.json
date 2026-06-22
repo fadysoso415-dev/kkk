@@ -51,7 +51,23 @@
         "categoryId": { "type": "string", "description": "Linked category document ID" },
         "isAvailable": { "type": "boolean", "description": "In stock/is active on menu" },
         "badge": { "type": "string", "description": "Ribbon text like HOT, NEW, VEGAN" },
-        "order": { "type": "integer", "description": "Sorting priority number within category" }
+        "order": { "type": "integer", "description": "Sorting priority number within category" },
+        "discountLabel": { "type": "string", "description": "Text labels for discount offer, e.g. -20% or Friday Madness" },
+        "discountExpiry": { "type": "string", "description": "ISO datetime string when the discount offer expires" },
+        "sizes": {
+          "type": "array",
+          "description": "List of available sizes and their respective price additions",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "nameEn": { "type": "string" },
+              "priceAdded": { "type": "number" }
+            },
+            "required": ["id", "name", "priceAdded"]
+          }
+        }
       },
       "required": ["name", "price", "categoryId", "isAvailable", "order"]
     },
@@ -73,7 +89,8 @@
               "productId": { "type": "string" },
               "name": { "type": "string" },
               "price": { "type": "number" },
-              "quantity": { "type": "integer" }
+              "quantity": { "type": "integer" },
+              "size": { "type": "string" }
             }
           }
         }
@@ -91,6 +108,20 @@
         "referrer": { "type": "string" }
       },
       "required": ["timestamp", "device"]
+    },
+    "Shift": {
+      "title": "Shift",
+      "description": "Shift report logged historical data of closed shifts.",
+      "type": "object",
+      "properties": {
+        "closedAt": { "type": "string", "format": "date-time", "description": "Timestamp when the shift has been finalized and closed" },
+        "totalOrders": { "type": "integer", "description": "Total count of orders completed/placed during shift" },
+        "totalSales": { "type": "number", "description": "Sum of prices of all orders placed during shift" },
+        "settledSales": { "type": "number", "description": "Total amount paid or settled in cashier box" },
+        "unsettledSales": { "type": "number", "description": "Total unpaid or active balances remaining when closing" },
+        "employeeName": { "type": "string", "description": "Name or email of the employee in duty" }
+      },
+      "required": ["closedAt", "totalOrders", "totalSales", "settledSales", "unsettledSales"]
     }
   },
   "firestore": {
@@ -113,6 +144,10 @@
     "/restaurants/{restaurantId}/views_log/{viewId}": {
       "schema": "ViewLog",
       "description": "Subcollection tracking individual customer menu view statistics"
+    },
+    "/restaurants/{restaurantId}/shifts/{shiftId}": {
+      "schema": "Shift",
+      "description": "Subcollection tracking historical shift reports and physical cashier box logs"
     }
   }
 }

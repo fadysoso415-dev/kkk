@@ -42,7 +42,7 @@ import {
   ShoppingBag,
   Palette
 } from 'lucide-react';
-import { Restaurant, Category, Product, Order, ViewLog } from '../types';
+import { Restaurant, Category, Product, Order, ViewLog, Shift, ProductSize } from '../types';
 import { 
   saveRestaurant, 
   saveCategory, 
@@ -50,7 +50,12 @@ import {
   saveProduct, 
   deleteProduct,
   getCategories,
-  getProducts
+  getProducts,
+  updateOrderStatus,
+  updateOrderSettlementStatus,
+  logShift,
+  getShifts,
+  clearShiftOrders
 } from '../firebase';
 import { SAMPLE_RESTAURANTS, SAMPLE_CATEGORIES, SAMPLE_PRODUCTS } from '../sampleData';
 import { 
@@ -157,7 +162,12 @@ const compressAndResizeImage = (file: File, maxDimension: number = 800): Promise
 };
 
 export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, lang, onChangeLang }: DashboardProps) {
-  const [activeTab, setActiveTab] = useState<'settings' | 'categories' | 'products' | 'qrcode' | 'analytics'>('settings');
+  const [activeTab, setActiveTab] = useState<'settings' | 'categories' | 'products' | 'qrcode' | 'analytics' | 'orders' | 'accounts'>('settings');
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
+    const saved = localStorage.getItem('menuclick_sound_enabled');
+    return saved !== null ? saved === 'true' : true;
+  });
+  const [orderFilter, setOrderFilter] = useState<'all' | 'pending' | 'preparing' | 'completed'>('all');
   const [analyticsPeriod, setAnalyticsPeriod] = useState<'today' | 'week' | 'month'>('week');
   
   // Restaurant Settings State
@@ -212,8 +222,271 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
   const [loadingAnalytics, setLoadingAnalytics] = useState(false);
   const [newOrderNotifications, setNewOrderNotifications] = useState<Order[]>([]);
 
+  // Shift Management States
+  const [shifts, setShifts] = useState<Shift[]>([]);
+  const [loadingShifts, setLoadingShifts] = useState(false);
+  const [showShiftConfirmModal, setShowShiftConfirmModal] = useState(false);
+
+  // Synchronize sound option changes and load mock orders if in testing/demo mode
+  useEffect(() => {
+    localStorage.setItem('menuclick_sound_enabled', String(soundEnabled));
+  }, [soundEnabled]);
+
+  useEffect(() => {
+    if (isDemo || !restaurant?.id || restaurant.id === 'my-restaurant') {
+      setOrders([
+        {
+          id: 'demo-1',
+          tableName: 'طاولة 4',
+          timestamp: new Date(Date.now() - 5 * 60000).toISOString(),
+          createdAt: 'قبل 5 دقائق',
+          totalPrice: 410,
+          status: 'pending',
+          notes: 'يرجى تجهيز الوجبة بسرعة وبدون بصل 🍔',
+          items: [
+            { productId: 'p1', name: 'برجر كلاسيك رويال دبل 🍔', price: 180, quantity: 2 },
+            { productId: 'p4', name: 'فرنش فرايز ذهبية مملحة 🍟', price: 50, quantity: 1 }
+          ]
+        },
+        {
+          id: 'demo-2',
+          tableName: 'طاولة 12',
+          timestamp: new Date(Date.now() - 15 * 60000).toISOString(),
+          createdAt: 'قبل 15 دقيقة',
+          totalPrice: 120,
+          status: 'preparing',
+          notes: 'زيادة الكاتشب الحار وصوص المايونيز',
+          items: [
+            { productId: 'p2', name: 'شاورما دجاج سوبر فرشك 🌯', price: 120, quantity: 1 }
+          ]
+        },
+        {
+          id: 'demo-3',
+          tableName: 'طاولة 1',
+          timestamp: new Date(Date.now() - 40 * 60000).toISOString(),
+          createdAt: 'قبل 40 دقيقة',
+          totalPrice: 790,
+          status: 'completed',
+          notes: 'تقسيم البيتزا لأربعة أنصاف متطابقة لأجل الأطفال',
+          items: [
+            { productId: 'p3', name: 'بيتزا مارجريتا نابوليتان 🍕', price: 150, quantity: 3 },
+            { productId: 'p1', name: 'برجر كلاسيك رويال دبل 🍔', price: 180, quantity: 1 },
+            { productId: 'p4', name: 'فرنش فرايز ذهبية مملحة 🍟', price: 50, quantity: 2 }
+          ]
+        }
+      ]);
+    }
+  }, [isDemo, restaurant?.id]);
+
+  // Central Hub to handle updating order statuses
+  const handleUpdateOrderStatus = async (orderId: string, status: 'pending' | 'preparing' | 'completed') => {
+    try {
+      const isMockOrder = orderId.startsWith('test-') || orderId.startsWith('demo-');
+      if (!isDemo && restaurant.id && restaurant.id !== 'my-restaurant' && !isMockOrder) {
+        await updateOrderStatus(restaurant.id, orderId, status);
+        // Let the state be updated naturally from the snapshot stream
+      } else {
+        // Mock mode state updates
+        setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status } : o));
+      }
+      setAlertMsg({
+        type: 'success',
+        text: status === 'preparing'
+          ? (lang === 'ar' ? '🍳 تم تغيير الحالة بنجاح وبدء تسوية الوجبة بالمطبخ!' : '🍳 Started cooking inside the kitchen successfully!')
+          : status === 'completed'
+          ? (lang === 'ar' ? '🎉 الوجبة جاهزة تماماً ولذيذة، وتم تحديث الحالة لتسليمها للزبون!' : '🎉 Food completed and is warm! Tagged as ready for delivery!')
+          : (lang === 'ar' ? '⏳ تمت إعادة الطلب وتغييره لخانة قيد الانتظار.' : '⏳ Reset order back to pending list.')
+      });
+    } catch (err) {
+      console.error(err);
+      setAlertMsg({
+        type: 'error',
+        text: lang === 'ar' ? 'حدث عائق بالاتصال بقاعدة البيانات للتحديث.' : 'Cloud connection sync error.'
+      });
+    }
+  };
+
+  // Central Hub to handle updating order settlement status (تصفية حساب الشيف مع الكاشير)
+  const handleUpdateOrderSettlement = async (orderId: string, isSettled: boolean) => {
+    try {
+      const isMockOrder = orderId.startsWith('test-') || orderId.startsWith('demo-');
+      if (!isDemo && restaurant.id && restaurant.id !== 'my-restaurant' && !isMockOrder) {
+        await updateOrderSettlementStatus(restaurant.id, orderId, isSettled);
+      } else {
+        // Mock mode state updates
+        setOrders(prev => prev.map(o => o.id === orderId ? { ...o, isSettled, settledAt: isSettled ? new Date().toISOString() : undefined } : o));
+      }
+      setAlertMsg({
+        type: 'success',
+        text: isSettled
+          ? (lang === 'ar' ? '✅ تم تصفية حساب هذا الطلب وتسويته بين الشيف والكاشير بنجاح!' : '✅ This order was successfully settled between Chef and Cashier!')
+          : (lang === 'ar' ? '🔄 تم إلغاء تصفية الطلب وإرجاعه للحسابات النشطة.' : '🔄 Settle status removed, reverted to active balance.')
+      });
+    } catch (err) {
+      console.error(err);
+      setAlertMsg({
+        type: 'error',
+        text: lang === 'ar' ? 'تعذر تصفية حساب الطلب، يرجى المحاولة لاحقاً.' : 'Could not update settlement, please try again.'
+      });
+    }
+  };
+
+  // Settle all completed orders at once
+  const handleSettleAllCompleted = async () => {
+    try {
+      const completedUnsettled = orders.filter(o => o.status === 'completed' && !o.isSettled);
+      if (completedUnsettled.length === 0) {
+        setAlertMsg({
+          type: 'error',
+          text: lang === 'ar' ? 'لا توجد طلبات مكتملة وغير مصفاة حالياً لتسويتها.' : 'No completed unsettled orders found to settle.'
+        });
+        return;
+      }
+
+      for (const o of completedUnsettled) {
+        const isMockOrder = o.id?.startsWith('test-') || o.id?.startsWith('demo-');
+        if (!isDemo && restaurant.id && restaurant.id !== 'my-restaurant' && !isMockOrder) {
+          await updateOrderSettlementStatus(restaurant.id, o.id!, true);
+        }
+      }
+
+      if (isDemo || restaurant.id === 'my-restaurant') {
+        setOrders(prev => prev.map(o => o.status === 'completed' ? { ...o, isSettled: true, settledAt: new Date().toISOString() } : o));
+      }
+
+      setAlertMsg({
+        type: 'success',
+        text: lang === 'ar' ? '🧼 تم تصفية وتصفير حسابات جميع الطلبات الجاهزة بنجاح!' : '🧼 Successfully settled all outstanding chef items!'
+      });
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // Clear current shift data and start fresh
+  const handleClearAndStartNewShift = async () => {
+    try {
+      if (orders.length === 0) {
+        setAlertMsg({
+          type: 'error',
+          text: lang === 'ar' ? '⚠️ لا يمكن تصفية ورشة صفراء أو وردية فارغة لا تحتوي على أي طلبات!' : '⚠️ Cannot clear an empty shift without any orders!'
+        });
+        return;
+      }
+
+      // Compute figures for this shift
+      const totalOrdersCount = orders.length;
+      const totalShiftSales = orders.reduce((acc, o) => acc + (o.totalPrice || 0), 0);
+      const settledShiftSales = orders.filter(o => o.isSettled).reduce((acc, o) => acc + (o.totalPrice || 0), 0);
+      const unsettledShiftSales = orders.filter(o => !o.isSettled).reduce((acc, o) => acc + (o.totalPrice || 0), 0);
+
+      const shiftData: Omit<Shift, "id"> = {
+        closedAt: new Date().toISOString(),
+        totalOrders: totalOrdersCount,
+        totalSales: totalShiftSales,
+        settledSales: settledShiftSales,
+        unsettledSales: unsettledShiftSales,
+        employeeName: user?.email || 'كاشير الوردية'
+      };
+
+      if (!isDemo && restaurant.id && restaurant.id !== 'my-restaurant') {
+        setLoadingShifts(true);
+        // Save the shift into firestore
+        await logShift(restaurant.id, shiftData);
+        // Delete active order docs
+        await clearShiftOrders(restaurant.id);
+        
+        // Fetch fresh list of shifts
+        const fetched = await getShifts(restaurant.id);
+        setShifts(fetched);
+        setOrders([]);
+      } else {
+        // Demomode state update
+        setShifts(prev => [
+          { id: 'demo-shift-' + Date.now(), ...shiftData },
+          ...prev
+        ]);
+        setOrders([]);
+      }
+
+      setAlertMsg({
+        type: 'success',
+        text: lang === 'ar' 
+          ? `🧼 تم إقفال وتصفية حسابات الوردية الحالية بنجاح! إجمالي المبيعات: ${totalShiftSales} ${restaurant.currency}. تم حفظ التقرير والبدء من جديد بوردية نظيفة.` 
+          : `🧼 Shift closed and settled! Total Sales: ${totalShiftSales} ${restaurant.currency}. Shift report logged and a new shift started.`
+      });
+
+    } catch (err) {
+      console.error(err);
+      setAlertMsg({
+        type: 'error',
+        text: lang === 'ar' ? 'حدث خطأ أثناء محاولة تصفية الوردية وبدء وردية جديدة.' : 'An error occurred while clearing the shift.'
+      });
+    } finally {
+      setLoadingShifts(false);
+    }
+  };
+
+  // Inject a live simulated table order for testing the chimes and toasts instantly
+  const injectSampleOrderForTesting = () => {
+    const tableIdNum = Math.floor(Math.random() * 15) + 1;
+    const testId = 'test-' + Math.random().toString(36).substring(2, 9);
+    
+    const randomItemsList = [
+      [
+        { productId: 'p1', name: 'برجر كلاسيك رويال دبل 🍔', price: 180, quantity: 2 },
+        { productId: 'p4', name: 'فرنش فرايز ذهبية مملحة 🍟', price: 50, quantity: 1 }
+      ],
+      [
+        { productId: 'p2', name: 'شاورما دجاج سوبر فرشك 🌯', price: 120, quantity: 1 },
+        { productId: 'p3', name: 'بيتزا مارجريتا نابوليتان 🍕', price: 150, quantity: 1 }
+      ],
+      [
+        { productId: 'p3', name: 'بيتزا مارجريتا نابوليتان 🍕', price: 150, quantity: 2 },
+        { productId: 'p4', name: 'فرنش فرايز ذهبية مملحة 🍟', price: 50, quantity: 2 }
+      ]
+    ];
+    
+    const items = randomItemsList[Math.floor(Math.random() * randomItemsList.length)];
+    const totalPrice = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    const notesOptions = [
+      'يرجى توفير المزيد من صوص الثومية الحارة 🌶️',
+      'بدون مايونيز نهائياً لوجود حساسية طعام ⚠️',
+      'زيادة الثلج في المشاريب وتجهيز الوجبات بطلب حار!',
+      'تجهيز سريع ولكم الشكر والتقدير ✨'
+    ];
+    
+    const notes = notesOptions[Math.floor(Math.random() * notesOptions.length)];
+    
+    const newTestOrder = {
+      id: testId,
+      tableName: `طاولة ${tableIdNum}`,
+      timestamp: new Date().toISOString(),
+      createdAt: 'الآن',
+      totalPrice,
+      status: 'pending' as const,
+      notes,
+      items
+    };
+    
+    // Append to live list
+    setOrders(prev => [newTestOrder, ...prev]);
+    
+    // Spawn Floating Notification Toast!
+    setNewOrderNotifications(prev => [newTestOrder, ...prev]);
+    
+    // Chime trigger
+    playNotificationSound();
+    
+    setAlertMsg({
+      type: 'success',
+      text: '🧪 تمت محاكاة استقبال طلب QR بنجاح! تحقق من الجرس ورنين التنبيه والتوست المنسدل.'
+    });
+  };
+
   // Synthesize notification audio chime
   const playNotificationSound = () => {
+    if (!soundEnabled) return;
     try {
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
       if (!AudioContextClass) return;
@@ -354,6 +627,33 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
     };
   }, [activeTab, restaurant?.id, isDemo]);
 
+  // Lazy load closed shifts history when the accounts tab becomes active
+  useEffect(() => {
+    if (activeTab !== 'accounts' || isDemo || !restaurant?.id) return;
+
+    let isMounted = true;
+    const fetchShifts = async () => {
+      setLoadingShifts(true);
+      try {
+        const data = await getShifts(restaurant.id);
+        if (isMounted) {
+          setShifts(data);
+        }
+      } catch (err) {
+        console.warn("Could not load closed shifts", err);
+      } finally {
+        if (isMounted) {
+          setLoadingShifts(false);
+        }
+      }
+    };
+
+    fetchShifts();
+    return () => {
+      isMounted = false;
+    };
+  }, [activeTab, restaurant?.id, isDemo]);
+
   // Click simulator handlers for testing cloud analytics instantly
   const handleSimulateVisitor = async () => {
     if (!restaurant?.id || isDemo) {
@@ -457,6 +757,9 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
     isAvailable: boolean;
     badge: string;
     order: string | number;
+    discountLabel: string;
+    discountExpiry: string;
+    sizes: ProductSize[];
   }>({
     name: '',
     description: '',
@@ -468,7 +771,10 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
     categoryId: '',
     isAvailable: true,
     badge: '',
-    order: 1
+    order: 1,
+    discountLabel: '',
+    discountExpiry: '',
+    sizes: []
   });
 
   // Pull existing DB records or prefill with high quality demo elements
@@ -861,6 +1167,16 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
       return;
     }
 
+    // Validate custom size options if there are any
+    if (productForm.sizes && productForm.sizes.length > 0) {
+      for (const s of productForm.sizes) {
+        if (!s.name || !s.name.trim()) {
+          alert("يرجى كتابة الاسم (بالعربية) لجميع الأحجام المضافة، أو حذف الحجم الفارغ باستخدام أيقونة سلة المهملات بجانبه.");
+          return;
+        }
+      }
+    }
+
     setIsProductSaving(true);
 
     const id = editingProduct ? editingProduct.id : `prod-${Date.now()}`;
@@ -885,7 +1201,10 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
       categoryId: categoryId,
       isAvailable: productForm.isAvailable,
       badge: productForm.badge || undefined,
-      order: Number(productForm.order)
+      order: Number(productForm.order),
+      discountLabel: productForm.discountLabel || undefined,
+      discountExpiry: productForm.discountExpiry || undefined,
+      sizes: productForm.sizes || []
     };
 
     try {
@@ -908,7 +1227,10 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
           categoryId: newProd.categoryId,
           isAvailable: newProd.isAvailable,
           badge: newProd.badge || '',
-          order: newProd.order
+          order: newProd.order,
+          discountLabel: newProd.discountLabel || '',
+          discountExpiry: newProd.discountExpiry || '',
+          sizes: newProd.sizes || []
         });
 
         if (editingProduct) {
@@ -1025,10 +1347,11 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
               onDismiss={(id) => {
                 setNewOrderNotifications(prev => prev.filter(n => n.id !== id));
               }}
-              onViewStats={() => {
-                setActiveTab('analytics');
+              onViewOrders={() => {
+                setActiveTab('orders');
                 setNewOrderNotifications(prev => prev.filter(n => n.id !== notif.id));
               }}
+              onUpdateStatus={handleUpdateOrderStatus}
             />
           ))}
         </AnimatePresence>
@@ -1123,12 +1446,30 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
         </button>
 
         <button
-          onClick={() => setActiveTab('analytics')}
-          className={`flex-1 flex flex-col items-center justify-center gap-1 h-full relative cursor-pointer ${activeTab === 'analytics' ? 'text-amber-500 font-black' : 'text-slate-400 hover:text-slate-200'}`}
+          onClick={() => setActiveTab('orders')}
+          className={`flex-1 flex flex-col items-center justify-center gap-1 h-full relative cursor-pointer ${activeTab === 'orders' ? 'text-amber-500 font-black' : 'text-slate-400 hover:text-slate-200'}`}
         >
-          <BarChart2 className="w-[18px] h-[18px]" />
+          <div className="relative">
+            <ShoppingBag className="w-[18px] h-[18px]" />
+            {orders.filter(o => o.status === 'pending' || o.status === 'preparing').length > 0 && (
+              <span className="absolute -top-1.5 -right-2 bg-rose-500 text-[8px] text-white px-1 py-0 rounded-full scale-90 font-bold font-sans animate-pulse">
+                {orders.filter(o => o.status === 'pending' || o.status === 'preparing').length}
+              </span>
+            )}
+          </div>
           <span className="text-[9px] tracking-tight">{lang === 'ar' ? 'الطلبات' : 'Orders'}</span>
-          {activeTab === 'analytics' && (
+          {activeTab === 'orders' && (
+            <motion.div layoutId="mobile-nav-indicator" className="absolute bottom-1 w-5 h-0.5 bg-amber-500 rounded-full" />
+          )}
+        </button>
+
+        <button
+          onClick={() => setActiveTab('accounts')}
+          className={`flex-1 flex flex-col items-center justify-center gap-1 h-full relative cursor-pointer ${activeTab === 'accounts' ? 'text-amber-500 font-black' : 'text-slate-400 hover:text-slate-200'}`}
+        >
+          <Percent className="w-[18px] h-[18px]" />
+          <span className="text-[9px] tracking-tight">{lang === 'ar' ? 'التصفية' : 'Settle'}</span>
+          {activeTab === 'accounts' && (
             <motion.div layoutId="mobile-nav-indicator" className="absolute bottom-1 w-5 h-0.5 bg-amber-500 rounded-full" />
           )}
         </button>
@@ -1206,6 +1547,32 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
             >
               <QrCode className="w-4.5 h-4.5" />
               رمز الاستجابة QR Code
+            </button>
+
+            <button
+              onClick={() => setActiveTab('orders')}
+              className={`w-full py-3 px-4 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-3 cursor-pointer transition duration-150 relative ${activeTab === 'orders' ? 'bg-amber-500 text-white shadow-lg shadow-amber-500/15' : 'hover:bg-slate-800 hover:text-white'}`}
+            >
+              <ShoppingBag className="w-4.5 h-4.5" />
+              إدارة الطلبات الحية 🛎️
+              {orders.filter(o => o.status === 'pending' || o.status === 'preparing').length > 0 && (
+                <span className="mr-auto bg-rose-500 text-[10px] text-white px-2 py-0.5 rounded-full font-sans font-extrabold animate-bounce">
+                  {orders.filter(o => o.status === 'pending' || o.status === 'preparing').length}
+                </span>
+              )}
+            </button>
+
+            <button
+              onClick={() => setActiveTab('accounts')}
+              className={`w-full py-3 px-4 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-3 cursor-pointer transition duration-150 ${activeTab === 'accounts' ? 'bg-amber-500 text-white shadow-lg shadow-amber-500/15' : 'hover:bg-slate-800 hover:text-white'}`}
+            >
+              <Percent className="w-4.5 h-4.5 text-emerald-400" />
+              تصفية حسابات المطبخ والوردية 💰
+              {orders.filter(o => o.status === 'completed' && !o.isSettled).length > 0 && (
+                <span className="mr-auto bg-emerald-500 text-[10px] text-emerald-950 px-2 py-0.5 rounded-full font-sans font-extrabold animate-pulse">
+                  {orders.filter(o => o.status === 'completed' && !o.isSettled).length}
+                </span>
+              )}
             </button>
 
             <button
@@ -1775,7 +2142,10 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
                     categoryId: initialCatId,
                     isAvailable: true,
                     badge: '',
-                    order: products.length + 1
+                    order: products.length + 1,
+                    discountLabel: '',
+                    discountExpiry: '',
+                    sizes: []
                   });
                   setIsProductModalOpen(true);
                 }}
@@ -1867,7 +2237,10 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
                                       categoryId: prod.categoryId,
                                       isAvailable: prod.isAvailable,
                                       badge: prod.badge || '',
-                                      order: prod.order
+                                      order: prod.order,
+                                      discountLabel: prod.discountLabel || '',
+                                      discountExpiry: prod.discountExpiry || '',
+                                      sizes: prod.sizes || []
                                     });
                                     setIsProductModalOpen(true);
                                   }}
@@ -1964,6 +2337,614 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
 
           </div>
         )}
+
+        {/* TAB 5 (NEW): LIVE ORDERS & TICKETS CONCEPT */}
+        {activeTab === 'orders' && (() => {
+          const pendingCount = orders.filter(o => o.status === 'pending' || !o.status).length;
+          const preparingCount = orders.filter(o => o.status === 'preparing').length;
+          const completedCount = orders.filter(o => o.status === 'completed').length;
+
+          const displayedInTab = orders.filter(o => {
+            if (orderFilter === 'all') return true;
+            if (orderFilter === 'pending') return o.status === 'pending' || !o.status;
+            return o.status === orderFilter;
+          });
+
+          return (
+            <div className="space-y-6">
+              
+              {/* Row: Stats & Action bar */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                
+                {/* Pending ticket Count card */}
+                <div className="bg-amber-500/10 border border-amber-500/20 p-4 rounded-2xl flex flex-col justify-between">
+                  <div>
+                    <span className="text-xs text-amber-700 font-bold block">طلب جديد بالانتظار ⏳</span>
+                    <h2 className="text-2xl font-black text-amber-850 mt-2">{pendingCount}</h2>
+                  </div>
+                  <span className="text-[10px] text-amber-600 mt-2 font-medium">بانتظار موافقة المطبخ للطهي</span>
+                </div>
+
+                {/* Preparing ticket Count card */}
+                <div className="bg-indigo-500/10 border border-indigo-500/20 p-4 rounded-2xl flex flex-col justify-between">
+                  <div>
+                    <span className="text-xs text-indigo-700 font-bold block">قيد التحضير والطهي 🍳</span>
+                    <h2 className="text-2xl font-black text-indigo-850 mt-2">{preparingCount}</h2>
+                  </div>
+                  <span className="text-[10px] text-indigo-600 mt-2 font-medium">يجري طهيها وتجهيزها حالياً</span>
+                </div>
+
+                {/* Completed ticket Count card */}
+                <div className="bg-emerald-500/10 border border-emerald-500/20 p-4 rounded-2xl flex flex-col justify-between">
+                  <div>
+                    <span className="text-xs text-emerald-700 font-bold block">طلبات تم تسليمها ✅</span>
+                    <h2 className="text-2xl font-black text-emerald-850 mt-2">{completedCount}</h2>
+                  </div>
+                  <span className="text-[10px] text-emerald-600 mt-2 font-medium">تم الطهي والاستلام بنجاح</span>
+                </div>
+
+                {/* Total Counter card */}
+                <div className="bg-slate-500/5 border border-slate-200 p-4 rounded-2xl flex flex-col justify-between">
+                  <div>
+                    <span className="text-xs text-slate-500 font-bold block">إجمالي أوراق الطلبات</span>
+                    <h2 className="text-2xl font-black text-slate-850 mt-2">{orders.length}</h2>
+                  </div>
+                  <button 
+                    onClick={injectSampleOrderForTesting}
+                    className="text-[10px] text-white bg-amber-600 hover:bg-amber-750 px-3 py-1.5 rounded-xl shrink-0 w-fit transition mt-2 font-black cursor-pointer shadow-sm"
+                  >
+                    🧪 محاكاة وصول طلب جديد
+                  </button>
+                </div>
+
+              </div>
+
+              {/* Speaker sound controller and simulation header */}
+              <div className="bg-white border border-slate-150 p-4 rounded-2xl flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 shadow-sm">
+                <div className="flex items-center gap-3">
+                  <div className={`p-2.5 rounded-full ${soundEnabled ? 'bg-amber-100 text-amber-600' : 'bg-slate-100 text-slate-400'}`}>
+                    <Clock className="w-5 h-5 animate-pulse" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs sm:text-sm font-black text-slate-900">جرس التنبيه للطلبات الجديدة</h4>
+                    <p className="text-[10px] text-slate-500 block mt-0.5">سماع رنين جرس صوت مخصص مسموع في المطبخ فور إتمام طلب العميل.</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3 self-end sm:self-auto font-sans">
+                  <span className="text-[10px] font-bold text-slate-500">حالة الجرس المطبخي:</span>
+                  <button
+                    onClick={() => setSoundEnabled(!soundEnabled)}
+                    className={`flex items-center gap-1.5 py-1.5 px-3 rounded-xl text-xs font-black transition cursor-pointer ${
+                      soundEnabled 
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-md shadow-emerald-500/5' 
+                        : 'bg-slate-100 text-slate-500 border border-slate-200'
+                    }`}
+                  >
+                    <span>{soundEnabled ? 'مفعل 🔊' : 'مكتوم 🔇'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Main table list / Filter tabs */}
+              <div className="space-y-4">
+                
+                {/* Pills tabs selection */}
+                <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-200 pb-3">
+                  <button
+                    onClick={() => setOrderFilter('all')}
+                    className={`px-4 py-1.5 rounded-full text-xs font-black transition cursor-pointer ${
+                      orderFilter === 'all' 
+                        ? 'bg-slate-900 text-white shadow-md' 
+                        : 'text-slate-500 hover:bg-slate-100'
+                    }`}
+                  >
+                    الكل ({orders.length})
+                  </button>
+                  <button
+                    onClick={() => setOrderFilter('pending')}
+                    className={`px-4 py-1.5 rounded-full text-xs font-black transition cursor-pointer flex items-center gap-1.5 ${
+                      orderFilter === 'pending' 
+                        ? 'bg-amber-500 text-amber-950 shadow-md border border-amber-500/10' 
+                        : 'text-slate-500 hover:bg-slate-100'
+                    }`}
+                  >
+                    <span>قيد الانتظار</span>
+                    <span className="bg-amber-950/25 text-white text-[10px] px-1.5 py-0.2 rounded-full">{pendingCount}</span>
+                  </button>
+                  <button
+                    onClick={() => setOrderFilter('preparing')}
+                    className={`px-4 py-1.5 rounded-full text-xs font-black transition cursor-pointer flex items-center gap-1.5 ${
+                      orderFilter === 'preparing' 
+                        ? 'bg-indigo-600 text-white shadow-md' 
+                        : 'text-slate-500 hover:bg-slate-100'
+                    }`}
+                  >
+                    <span>قيد التحضير</span>
+                    <span className="bg-indigo-950/25 text-white text-[10px] px-1.5 py-0.2 rounded-full">{preparingCount}</span>
+                  </button>
+                  <button
+                    onClick={() => setOrderFilter('completed')}
+                    className={`px-4 py-1.5 rounded-full text-xs font-black transition cursor-pointer flex items-center gap-1.5 ${
+                      orderFilter === 'completed' 
+                        ? 'bg-emerald-600 text-white shadow-md' 
+                        : 'text-slate-500 hover:bg-slate-100'
+                    }`}
+                  >
+                    <span>مكتملة الاستلام</span>
+                    <span className="bg-emerald-950/25 text-white text-[10px] px-1.5 py-0.2 rounded-full">{completedCount}</span>
+                  </button>
+                </div>
+
+                {/* Grid list or empty prompt */}
+                {displayedInTab.length === 0 ? (
+                  <div className="bg-white border rounded-3xl p-12 text-center space-y-3.5 shadow-sm">
+                    <ShoppingBag className="w-12 h-12 mx-auto text-slate-350" />
+                    <h4 className="text-sm font-black text-slate-900">لا توجد أوراق طلب حالياً في هذا القسم</h4>
+                    <p className="text-xs text-slate-500 max-w-xs mx-auto">سيظهر أي طلب يرسله الزبون عبر مسح كود الـ QR فوراً هنا، وسيرن التنبيه الصوتي في نفس اللحظة.</p>
+                    <button
+                      onClick={injectSampleOrderForTesting}
+                      className="bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-black py-2 px-4 rounded-xl shadow-md transition mx-auto cursor-pointer"
+                    >
+                      🧪 تجربة إرسال طلب محاكي فوري
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid md:grid-cols-2 gap-4">
+                    {displayedInTab.map((order) => {
+                      const isPending = order.status === 'pending' || !order.status;
+                      const isPreparing = order.status === 'preparing';
+                      const isCompleted = order.status === 'completed';
+
+                      return (
+                        <div key={order.id} className={`bg-white border rounded-3xl p-5 shadow-sm space-y-4 hover:border-slate-300 transition-all flex flex-col justify-between relative overflow-hidden ${
+                          isPending ? 'border-amber-250 ring-2 ring-amber-500/5' :
+                          isPreparing ? 'border-indigo-250 ring-2 ring-indigo-500/5' :
+                          'border-slate-100 opacity-90'
+                        }`}>
+                          
+                          {/* Top Card Bar: Table & Date */}
+                          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                            <div>
+                              <span className="text-xs text-slate-400 block font-mono">ID: {order.id?.substring(0, 8)}</span>
+                              <h3 className="text-base font-black text-slate-900 mt-0.5">{order.tableName}</h3>
+                            </div>
+                            <span className="text-[10px] text-slate-500/90 font-medium">
+                              {order.createdAt || (order.timestamp ? new Date(order.timestamp).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) : 'الآن')}
+                            </span>
+                          </div>
+
+                          {/* Items inside order */}
+                          <div className="space-y-2">
+                            {order.items.map((it, idx) => (
+                              <div key={idx} className="flex items-center justify-between text-xs text-slate-700 bg-slate-50 p-2 rounded-xl">
+                                <span>{it.name}</span>
+                                <span className="font-bold">x{it.quantity}</span>
+                              </div>
+                            ))}
+                          </div>
+
+                          {/* Notes/Special request */}
+                          {order.notes && (
+                            <div className="text-[11px] bg-amber-50 text-amber-900 p-2.5 rounded-xl border border-amber-100/50">
+                              <span className="font-bold">💡 ملاحظة الزبون: </span> {order.notes}
+                            </div>
+                          )}
+
+                          {/* Footer with buttons */}
+                          <div className="flex items-center justify-between pt-3 border-t border-slate-100 mt-auto">
+                            <div className="text-right">
+                              <span className="text-[10px] text-slate-400 block">الحساب الإجمالي</span>
+                              <span className="text-xs font-black text-slate-900">{order.totalPrice} {restaurant.currency}</span>
+                            </div>
+                            <div className="flex gap-1.5 font-sans">
+                              {isPending && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateOrderStatus(order.id!, 'preparing')}
+                                  className="bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] py-1.5 px-3 rounded-lg font-bold cursor-pointer transition whitespace-nowrap lg:px-4"
+                                >
+                                  🍳 بدء التحضير
+                                </button>
+                              )}
+                              {isPreparing && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateOrderStatus(order.id!, 'completed')}
+                                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] py-1.5 px-3 rounded-lg font-bold cursor-pointer transition animate-pulse whitespace-nowrap lg:px-4"
+                                >
+                                  🛎️ جاهز للتوصيل
+                                </button>
+                              )}
+                              {isCompleted && (
+                                <span className="bg-emerald-100 text-emerald-800 text-[10px] py-1 px-2.5 rounded-full font-bold whitespace-nowrap">
+                                  ✓ تم التسليم بالصالة
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* TAB 8: CHEF-TO-CASHIER ACCOUNT SETTLEMENT ENGINE */}
+        {activeTab === 'accounts' && (() => {
+          // Calculation of precise financial metrics
+          const allCompletedOrders = orders.filter(o => o.status === 'completed');
+          const settledCompletedValue = orders.filter(o => o.isSettled).reduce((acc, o) => acc + (o.totalPrice || 0), 0);
+          const outstandingCompletedValue = orders.filter(o => o.status === 'completed' && !o.isSettled).reduce((acc, o) => acc + (o.totalPrice || 0), 0);
+          const kitchenInProgressValue = orders.filter(o => o.status === 'pending' || o.status === 'preparing').reduce((acc, o) => acc + (o.totalPrice || 0), 0);
+          const totalSalesValue = orders.reduce((acc, o) => acc + (o.totalPrice || 0), 0);
+
+          return (
+            <div className="space-y-6">
+              {/* SHIFT SUMMARY AND CONTROLS HEADER */}
+              <div className="bg-slate-900 text-white rounded-3xl p-6 shadow-xl relative overflow-hidden flex flex-col md:flex-row md:items-center md:justify-between gap-4 font-sans border border-slate-800">
+                <div className="space-y-2 z-10 text-right">
+                  <h2 className="text-lg font-black flex items-center justify-end gap-2 text-amber-400 font-sans">
+                    <span>💵 محرك تسوية وإقفال حسابات الورديات</span>
+                  </h2>
+                  <p className="text-xs text-slate-300 max-w-xl leading-relaxed font-sans">
+                    من هنا يمكنكم إدارة التسويات المالية لمبيعات الصالة، تصفية الفواتير، وقف مبيعات الوردية الحالية وبدء وردية جديدة بالخيمة السحابية.
+                  </p>
+                </div>
+                <div className="z-10 shrink-0 self-end md:self-center font-sans">
+                  <button
+                    type="button"
+                    onClick={() => setShowShiftConfirmModal(true)}
+                    className="bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 font-black px-5 py-3 rounded-2xl text-xs flex items-center gap-2 transition duration-150 cursor-pointer shadow-lg shadow-amber-500/20 font-sans"
+                  >
+                    <span>🧹 تصفير وإقفال الوردية الحالية</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* FINANCIAL METRICS GRID */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 font-sans text-right font-sans">
+                {/* 1. Total Shipped/Completed sales */}
+                <div className="bg-white border text-right rounded-3xl p-5 shadow-sm space-y-2 relative overflow-hidden">
+                  <span className="text-2xl block mb-1">📊</span>
+                  <p className="text-slate-500 text-[10px] sm:text-xs font-sans">إجمالي مبيعات الوردية</p>
+                  <p className="font-black font-mono text-base sm:text-lg text-slate-900">
+                    {totalSalesValue} <span className="text-[10px] text-slate-500 font-sans">{restaurant.currency}</span>
+                  </p>
+                  <span className="absolute left-4 top-2 bg-slate-50 border text-slate-600 font-bold text-[9px] px-2 py-0.5 rounded-full font-mono">
+                    {orders.length} طلبات
+                  </span>
+                </div>
+
+                {/* 2. Settled/Paid */}
+                <div className="bg-emerald-50/20 border border-emerald-100 text-right rounded-3xl p-5 shadow-sm space-y-2 relative overflow-hidden">
+                  <span className="text-2xl block mb-1 font-sans">💰</span>
+                  <p className="text-emerald-805 text-[10px] sm:text-xs">مستلم كاش (تمت التسوية)</p>
+                  <p className="font-black font-mono text-base sm:text-lg text-emerald-700">
+                    {settledCompletedValue} <span className="text-[10px] font-sans">{restaurant.currency}</span>
+                  </p>
+                  <span className="absolute left-4 top-2 bg-emerald-500 text-white font-bold text-[9px] px-2 py-0.5 rounded-full font-mono">
+                    {orders.filter(o => o.isSettled).length} سددوا
+                  </span>
+                </div>
+
+                {/* 3. Completed but Outstanding */}
+                <div className="bg-rose-50/20 border border-rose-100 text-right rounded-3xl p-5 shadow-sm space-y-2 relative overflow-hidden">
+                  <span className="text-2xl block mb-1 font-sans">⚠️</span>
+                  <p className="text-rose-808 text-[10px] sm:text-xs">معلّق بالصالة (لم يسدد)</p>
+                  <p className="font-black font-mono text-base sm:text-lg text-rose-700">
+                    {outstandingCompletedValue} <span className="text-[10px] font-sans">{restaurant.currency}</span>
+                  </p>
+                  <span className="absolute left-4 top-2 bg-rose-600 text-white font-bold text-[9px] px-2 py-0.5 rounded-full font-mono">
+                    {orders.filter(o => o.status === 'completed' && !o.isSettled).length} طلب جاهز
+                  </span>
+                </div>
+
+                {/* 4. In Kitchen progressing */}
+                <div className="bg-indigo-50/20 border border-indigo-100 text-right rounded-3xl p-5 shadow-sm space-y-2 relative overflow-hidden font-sans">
+                  <span className="text-2xl block mb-1">🍳</span>
+                  <p className="text-slate-705 text-[10px] sm:text-xs">قيد الطهي والتجهيز</p>
+                  <p className="font-black font-mono text-base sm:text-lg text-indigo-700">
+                    {kitchenInProgressValue} <span className="text-[10px] font-sans">{restaurant.currency}</span>
+                  </p>
+                  <span className="absolute left-4 top-2 bg-indigo-600 text-white font-bold text-[9px] px-2 py-0.5 rounded-full font-mono font-sans">
+                    {orders.filter(o => o.status === 'pending' || o.status === 'preparing').length} طلب نشط
+                  </span>
+                </div>
+              </div>
+
+              {/* CURRENT ACTIVE ORDERS LIST & SETTLEMENT TABLE */}
+              <div className="bg-white border rounded-3xl shadow-sm overflow-hidden p-6 space-y-4">
+                <div className="border-b border-slate-100 pb-4 flex items-center justify-between">
+                  <div className="space-y-1 text-right w-full">
+                    <h3 className="text-sm font-black text-slate-900 flex items-center justify-end gap-1.5 font-sans">
+                      <span>🍽️ كشف وتصفية مبيعات الصالة بالوردية النشطة</span>
+                    </h3>
+                    <p className="text-[11px] text-slate-500 font-sans">قائمة بجميع طلبات الوردية الحالية؛ يمكنك تصفية حساب الطاولة بمجرد استلام الكاشير للمبلغ.</p>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-right border-collapse text-slate-600">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-100 text-slate-500 text-xs font-bold select-none">
+                        <th className="py-3 px-5 text-right font-bold">معرّف الطلب</th>
+                        <th className="py-3 px-5 text-right font-bold font-sans">رقم/اسم الطاولة</th>
+                        <th className="py-3 px-5 text-right font-bold">حالة وتجهيز المطبخ</th>
+                        <th className="py-3 px-5 text-right font-bold">محتويات الطلب</th>
+                        <th className="py-3 px-5 text-right font-bold">حساب الطاولة ماليًا</th>
+                        <th className="py-3 px-5 text-right font-bold">حالة التصفية (كاشير - شيف)</th>
+                        <th className="py-3 px-5 text-center font-bold">الإجراء المالي</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-xs font-sans">
+                      {orders.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="py-12 text-center text-slate-400 space-y-2">
+                            <span className="text-3xl block">📋</span>
+                            <span className="font-bold text-slate-850 block font-sans text-xs">لا توجد طلبات جارية بالصندوق حالياً</span>
+                            <span className="text-[10px] block text-slate-500">قم بإرسال طلب أو استخدم المحاكاة كطلب تجريبي لإدارة التسويات.</span>
+                          </td>
+                        </tr>
+                      ) : (
+                        orders.map((o) => {
+                          const isCompleted = o.status === 'completed';
+                          const isPreparing = o.status === 'preparing';
+                          const isPending = o.status === 'pending' || !o.status;
+
+                          return (
+                            <tr key={o.id} className={`hover:bg-slate-50/50 transition-colors ${o.isSettled ? 'bg-emerald-50/10' : ''}`}>
+                              {/* Order ID */}
+                              <td className="py-4 px-5 font-mono text-slate-400 font-bold text-xs">
+                                #{o.id?.substring(0, 8)}
+                              </td>
+
+                              {/* Table name */}
+                              <td className="py-4 px-5 font-bold text-slate-900 text-xs">
+                                {o.tableName}
+                              </td>
+
+                              {/* Chef cooking stage */}
+                              <td className="py-4 px-5 font-semibold text-[11px]">
+                                {isPending && (
+                                  <span className="bg-amber-100 text-amber-805 px-2.0 py-1.0 rounded-lg">
+                                    ⏳ قيد الانتظار بالمطبخ
+                                  </span>
+                                )}
+                                {isPreparing && (
+                                  <span className="bg-indigo-100 text-indigo-805 px-2.0 py-1.0 rounded-lg animate-pulse">
+                                    🍳 الشيف يطهيها الآن
+                                  </span>
+                                )}
+                                {isCompleted && (
+                                  <span className="bg-emerald-100 text-emerald-805 px-2.0 py-1.0 rounded-lg">
+                                    🛎️ وجبة مكتملة الجاهزية
+                                  </span>
+                                )}
+                              </td>
+
+                              {/* Items list summary */}
+                              <td className="py-4 px-5 max-w-xs">
+                                <div className="flex flex-wrap gap-1">
+                                  {o.items.map((it, idx) => (
+                                    <span key={idx} className="inline-block bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded font-medium text-[10px] font-sans">
+                                      {it.name} <span className="text-indigo-600 font-semibold font-mono text-[10px]">x{it.quantity}</span>
+                                    </span>
+                                  ))}
+                                </div>
+                              </td>
+
+                              {/* Cost */}
+                              <td className="py-4 px-5 font-black text-slate-900 font-mono text-xs">
+                                {o.totalPrice} {restaurant.currency}
+                              </td>
+
+                              {/* Settlement state label */}
+                              <td className="py-4 px-5">
+                                {o.isSettled ? (
+                                  <div className="space-y-1">
+                                    <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 py-1 px-2.5 rounded-lg font-bold flex items-center gap-1 w-fit text-[10px]">
+                                      <span>✓ تمت التصفية بالصندوق</span>
+                                    </span>
+                                    {o.settledAt && (
+                                      <span className="text-[9px] text-slate-400 block font-mono font-sans text-right">
+                                        {new Date(o.settledAt).toLocaleTimeString('ar-EG', {hour: '2-digit', minute:'2-digit'})}
+                                      </span>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <span className="text-rose-700 bg-rose-50 border border-rose-200 py-1 px-2.5 rounded-lg font-bold flex items-center gap-1 w-fit text-[10px]">
+                                    <span>⚠️ لم تسدد</span>
+                                  </span>
+                                )}
+                              </td>
+
+                              {/* Action Trigger */}
+                              <td className="py-4 px-5 text-center">
+                                {o.isSettled ? (
+                                  <button
+                                    onClick={() => handleUpdateOrderSettlement(o.id!, false)}
+                                    className="text-slate-400 hover:text-rose-600 font-bold hover:underline transition cursor-pointer text-[11px]"
+                                  >
+                                    إلغاء التصفية 🔄
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() => {
+                                      if (!isCompleted) {
+                                        setAlertMsg({
+                                          type: 'error',
+                                          text: lang === 'ar' ? 'عذراً، يجب على الشيف إكمال الوجبة وتجهيزها بالمطبخ أولاً قبل تصفية حسابها.' : 'Chef must complete prep before settle.'
+                                        });
+                                        return;
+                                      }
+                                      handleUpdateOrderSettlement(o.id!, true);
+                                    }}
+                                    className={`py-1.5 px-3 rounded-xl text-[10px] font-black transition cursor-pointer ${
+                                      isCompleted 
+                                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm shadow-emerald-600/10' 
+                                        : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                    }`}
+                                    title={!isCompleted ? 'يجب إكمال الوجبة بالمطبخ أولاً' : 'تصفية الحساب الآن'}
+                                    disabled={!isCompleted}
+                                  >
+                                    تسوية وتصفية الحساب 💰
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* PAST SHIFTS ARCHIVE LOG */}
+              <div className="bg-white border rounded-3xl shadow-sm overflow-hidden p-6 space-y-4">
+                <div className="border-b border-slate-100 pb-4 flex items-center justify-between font-sans">
+                  <div className="space-y-1">
+                    <h3 className="text-sm font-black text-slate-900 flex items-center gap-1.5 font-sans">
+                      <span>📜 أرشيف تقارير ومبيعات الورديات السابقة</span>
+                    </h3>
+                    <p className="text-[11px] text-slate-500 font-sans">سجل مفصل بالورديات التي تم إغلاقها وتصفيرها مسبقاً وتفاصيل تسوياتها المالية.</p>
+                  </div>
+                  <span className="bg-slate-100 border text-slate-600 font-bold text-[10px] px-3 py-1 rounded-full font-mono">
+                    {shifts.length} وردية مغلقة
+                  </span>
+                </div>
+
+                {loadingShifts ? (
+                  <div className="py-12 text-center text-slate-400 font-bold flex flex-col items-center justify-center gap-2">
+                    <span className="animate-spin rounded-full h-6 w-6 border-b-2 border-amber-600" />
+                    <span>جاري تحميل الأرشيف المالي...</span>
+                  </div>
+                ) : shifts.length === 0 ? (
+                  <div className="py-8 text-center text-slate-400 space-y-1">
+                    <span className="text-2xl block">📁</span>
+                    <span className="font-bold text-slate-600 text-xs block font-sans">لا توجد قيود ورديات مؤرشفة حتى الآن</span>
+                    <span className="text-[10px] block text-slate-500 font-sans">عند تصفية الوردية النشطة لأول مرة، سيظهر تقريرها المفصل وتفاصيل الإيرادات هنا بالتفصيل.</span>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-right text-xs border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-100 text-slate-500 font-bold font-sans">
+                          <th className="py-2.5 px-4 text-right">رقم الوردية</th>
+                          <th className="py-2.5 px-4 text-right">تاريخ ووقت الإغلاق</th>
+                          <th className="py-2.5 px-4 text-right">مراجع الوردية (الكاشير)</th>
+                          <th className="py-2.5 px-4 text-center">عدد طلبات الوردية</th>
+                          <th className="py-2.5 px-4 text-right">إجمالي مبيعات الوردية</th>
+                          <th className="py-2.5 px-4 text-right">مبيعات تمت تسويتها</th>
+                          <th className="py-2.5 px-4 text-right">حسابات متبقية لم تسدد</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-slate-600 font-sans">
+                        {shifts.map((s, idx) => (
+                          <tr key={s.id || idx} className="hover:bg-slate-50/40">
+                            <td className="py-3 px-4 font-mono font-bold text-slate-400">
+                              #{s.id?.substring(0, 6) || s.closedAt.substring(14, 19)}
+                            </td>
+                            <td className="py-3 px-4 font-sans text-slate-900 font-medium">
+                              {new Date(s.closedAt).toLocaleDateString('ar-EG', {
+                                weekday: 'long',
+                                year: 'numeric',
+                                month: 'short',
+                                day: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                              })}
+                            </td>
+                            <td className="py-3 px-4 font-bold text-teal-700">
+                              👤 {s.employeeName || 'الكاشير'}
+                            </td>
+                            <td className="py-3 px-4 text-center font-mono font-bold text-slate-800">
+                              {s.totalOrders}
+                            </td>
+                            <td className="py-3 px-4 font-mono font-black text-emerald-700">
+                              {s.totalSales} {restaurant.currency}
+                            </td>
+                            <td className="py-3 px-4 font-mono font-semibold text-emerald-600">
+                              {s.settledSales || 0} {restaurant.currency}
+                            </td>
+                            <td className="py-3 px-4 font-mono font-semibold text-rose-600">
+                              {s.unsettledSales || 0} {restaurant.currency}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* MODAL COUPLING FOR CONFIRMATION OF CLOSE SHIFT */}
+              {showShiftConfirmModal && (
+                <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+                  <div className="bg-white rounded-3xl p-6 max-w-lg w-full shadow-2xl space-y-4 animate-scale-up text-right relative overflow-hidden font-sans">
+                    <div className="bg-rose-50 border border-rose-200 p-4 rounded-2xl flex items-start gap-3">
+                      <span className="text-2xl mt-0.5 shrink-0">⚠️</span>
+                      <div className="space-y-1 text-right">
+                        <h4 className="font-black text-rose-950 text-sm">أنت على وشك تصفية حسابات الوردية الحالية والبدء من جديد!</h4>
+                        <p className="text-[11px] text-rose-800 leading-relaxed font-sans">
+                          هذا الإجراء سيقوم بأرشفة الصفقات الحالية في سجل ومحفوظات متجرك بالخيمة السحابية، ثم مسح كافة الطاولات وإرجاعها فارغة للوردية التالية.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2 border-y border-slate-150 py-4 text-right font-sans">
+                      <h5 className="font-extrabold text-xs text-slate-900">ملخص الوردية الحالية للمطعم:</h5>
+                      <div className="grid grid-cols-2 gap-3 text-xs">
+                        <div className="bg-slate-50 p-2.5 rounded-xl">
+                          <span className="text-slate-500 block">إجمالي عدد الطلبات:</span>
+                          <span className="font-black font-mono text-sm text-slate-800">{orders.length}</span>
+                        </div>
+                        <div className="bg-emerald-50 text-emerald-950 p-2.5 rounded-xl">
+                          <span className="text-emerald-700 block">إجمالي مبيعات الوردية:</span>
+                          <span className="font-black font-mono text-sm">{totalSalesValue} {restaurant.currency}</span>
+                        </div>
+                        <div className="bg-indigo-50 text-indigo-950 p-2.5 rounded-xl">
+                          <span className="text-indigo-700 block">طلب مصفى ومستلم بالكاش:</span>
+                          <span className="font-black font-mono text-sm">{settledCompletedValue} {restaurant.currency}</span>
+                        </div>
+                        <div className="bg-rose-50 text-rose-950 p-2.5 rounded-xl">
+                          <span className="text-rose-700 block">طلب معلق/لم يسدد بعد:</span>
+                          <span className="font-black font-mono text-sm">{totalSalesValue - settledCompletedValue} {restaurant.currency}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowShiftConfirmModal(false)}
+                        className="bg-slate-100 font-bold hover:bg-slate-200 text-slate-700 py-2.5 px-4 rounded-xl text-xs cursor-pointer font-sans"
+                      >
+                        تراجع وإلغاء ❌
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleClearAndStartNewShift();
+                          setShowShiftConfirmModal(false);
+                        }}
+                        className="bg-rose-600 font-black hover:bg-rose-700 text-white py-2.5 px-6 rounded-xl text-xs cursor-pointer shadow-lg shadow-rose-600/15 font-sans"
+                      >
+                        نعم، تصفية وقفل الوردية 🧹
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+            </div>
+          );
+        })()}
 
         {/* TAB 5: ANALYTICS & PLANS */}
         {activeTab === 'analytics' && (() => {
@@ -2320,6 +3301,117 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
                   };
                 });
 
+                // Compute daily sales trending over the last 7 days
+                const dailySalesDynamics = (() => {
+                  const last7Days: { [dateStr: string]: { dateLabel: string; sales: number; count: number } } = {};
+                  
+                  // Initialize last 7 days with zeros
+                  for (let i = 6; i >= 0; i--) {
+                    const d = new Date();
+                    d.setDate(d.getDate() - i);
+                    const dateStr = d.toISOString().split('T')[0];
+                    
+                    const dateLabel = d.toLocaleDateString('ar-EG', { weekday: 'short', day: 'numeric' });
+                    
+                    last7Days[dateStr] = { dateLabel, sales: 0, count: 0 };
+                  }
+
+                  if (hasRealLogs && orders.length > 0) {
+                    // Populate from real orders
+                    filteredOrdersList.forEach(o => {
+                      if (!o.timestamp) return;
+                      const orderDateStr = o.timestamp.split('T')[0];
+                      if (last7Days[orderDateStr]) {
+                        last7Days[orderDateStr].sales += (o.totalPrice || 0);
+                        last7Days[orderDateStr].count += 1;
+                      }
+                    });
+                  } else {
+                    // Simulated trend lines
+                    const mockIncrements = [1200, 1850, 1500, 2400, 3100, 2900, 4200];
+                    const mockCounts = [5, 8, 6, 11, 14, 12, 18];
+                    Object.keys(last7Days).forEach((key, idx) => {
+                      last7Days[key].sales = mockIncrements[idx % mockIncrements.length];
+                      last7Days[key].count = mockCounts[idx % mockCounts.length];
+                    });
+                  }
+
+                  return Object.values(last7Days);
+                })();
+
+                // Compute daytime periods best sellers for Recharts
+                const bestSellersDaytimeData = (() => {
+                  const topProducts = popularProducts.slice(0, 5);
+                  
+                  return topProducts.map(p => {
+                    let morningQty = 0;
+                    let lunchQty = 0;
+                    let eveningQty = 0;
+                    let nightQty = 0;
+
+                    if (hasRealLogs && orders.length > 0) {
+                      filteredOrdersList.forEach(o => {
+                        if (o.timestamp && o.items) {
+                          const date = new Date(o.timestamp);
+                          const hr = date.getHours();
+                          const matchItem = o.items.find((item: any) => item.productId === p.id);
+                          if (matchItem) {
+                            const qty = matchItem.quantity || 1;
+                            if (hr >= 8 && hr < 13) morningQty += qty;
+                            else if (hr >= 13 && hr < 17) lunchQty += qty;
+                            else if (hr >= 17 && hr < 22) eveningQty += qty;
+                            else nightQty += qty;
+                          }
+                        }
+                      });
+                    } else {
+                      // Hardcoded simulated values based proportion to make it beautiful and realistic
+                      const totalOrders = p.orders || 5;
+                      const cleanNameStr = p.name ? p.name.trim() : '';
+                      if (cleanNameStr.includes('برجر') || cleanNameStr.includes('Burgers') || cleanNameStr.includes('Burger')) {
+                        lunchQty = Math.floor(totalOrders * 0.4);
+                        eveningQty = Math.floor(totalOrders * 0.5);
+                        nightQty = totalOrders - (lunchQty + eveningQty);
+                      } else if (cleanNameStr.includes('بيتزا') || cleanNameStr.includes('Pizza')) {
+                        lunchQty = Math.floor(totalOrders * 0.3);
+                        eveningQty = Math.floor(totalOrders * 0.6);
+                        nightQty = totalOrders - (lunchQty + eveningQty);
+                      } else if (cleanNameStr.includes('شاورما') || cleanNameStr.includes('Shawarma')) {
+                        lunchQty = Math.floor(totalOrders * 0.35);
+                        eveningQty = Math.floor(totalOrders * 0.45);
+                        nightQty = totalOrders - (lunchQty + eveningQty);
+                      } else if (cleanNameStr.includes('قهوة') || cleanNameStr.includes('Coffee') || cleanNameStr.includes('عصير')) {
+                        morningQty = Math.floor(totalOrders * 0.6);
+                        lunchQty = Math.floor(totalOrders * 0.2);
+                        eveningQty = totalOrders - (morningQty + lunchQty);
+                      } else {
+                        morningQty = Math.floor(totalOrders * 0.1);
+                        lunchQty = Math.floor(totalOrders * 0.4);
+                        eveningQty = Math.floor(totalOrders * 0.4);
+                        nightQty = totalOrders - (morningQty + lunchQty + eveningQty);
+                      }
+                    }
+
+                    morningQty = Math.max(0, morningQty);
+                    lunchQty = Math.max(0, lunchQty);
+                    eveningQty = Math.max(0, eveningQty);
+                    nightQty = Math.max(0, nightQty);
+
+                    const cleanName = p.name ? p.name.trim() : '';
+                    const shortName = cleanName.length > 10 ? cleanName.substring(0, 10) + '...' : cleanName;
+
+                    return {
+                      name: cleanName,
+                      shortName,
+                      'الصباح 🌅': morningQty,
+                      'الظهيرة والغداء ☀️': lunchQty,
+                      'المساء والعشاء 🌙': eveningQty,
+                      'منتصف الليل 🌟': nightQty,
+                      totalSold: morningQty + lunchQty + eveningQty + nightQty
+                    };
+                  });
+                })();
+
                 const CHART_COLORS = ['#F59E0B', '#10B981', '#3B82F6', '#EC4899', '#8B5CF6', '#EF4444'];
 
                 const CustomTooltip = ({ active, payload }: any) => {
@@ -2337,121 +3429,377 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
                   return null;
                 };
 
-                return (
-                  <div className="bg-white border rounded-3xl p-6 shadow-sm space-y-6">
-                    <div className="pb-3 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
-                      <div>
-                        <h4 className="text-sm font-black text-slate-900 flex items-center gap-1.5">
-                          <BarChart2 className="w-5 h-5 text-amber-500 shrink-0" />
-                          التحليل الإحصائي المتقدم للأصناف والوجبات الأكثر مبيعاً ورواجاً 📊
-                        </h4>
-                        <p className="text-[10px] text-slate-400 mt-0.5">تحليل بياني تفاعلي للمبيعات مقارنة بالتوهج المعروض لمساعدتك في اتخاذ القرار</p>
+                const SalesDynamicsTooltip = ({ active, payload }: any) => {
+                  if (active && payload && payload.length) {
+                    const data = payload[0].payload;
+                    return (
+                      <div className="bg-slate-900 border border-slate-800 text-white p-3 py-2.5 rounded-2xl shadow-xl text-[11px] text-right space-y-1" dir="rtl">
+                        <p className="font-extrabold text-amber-400 mb-1">{data.dateLabel}</p>
+                        <p className="text-slate-300">💰 حجم المبيعات الإجمالي: <span className="font-mono text-emerald-400 font-extrabold">{data.sales} {restaurant.currency || 'EGP'}</span></p>
+                        <p className="text-slate-300">🛎️ عدد الطلبات المستلمة: <span className="font-mono text-white font-bold">{data.count} طلب حربي</span></p>
                       </div>
-                      <div className="text-[10px] font-black bg-amber-50 text-amber-800 px-3 py-1 rounded-xl shrink-0 select-none">
-                        مكتبة Recharts التفاعلية 📈
+                    );
+                  }
+                  return null;
+                };
+
+                return (
+                  <div className="space-y-8">
+                    {/* CHART BOX 1: DISHES DEMAND STATISTICS */}
+                    <div className="bg-white border rounded-3xl p-6 shadow-sm space-y-6">
+                      <div className="pb-3 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                        <div>
+                          <h4 className="text-sm font-black text-slate-900 flex items-center gap-1.5">
+                            <BarChart2 className="w-5 h-5 text-amber-500 shrink-0" />
+                            التحليل الإحصائي المتقدم للأصناف والوجبات الأكثر مبيعاً ورواجاً 📊
+                          </h4>
+                          <p className="text-[10px] text-slate-400 mt-0.5">تحليل بياني تفاعلي للمبيعات مقارنة بالتوهج المعروض لمساعدتك في اتخاذ القرار</p>
+                        </div>
+                        <div className="text-[10px] font-black bg-amber-50 text-amber-800 px-3 py-1 rounded-xl shrink-0 select-none">
+                          مكتبة Recharts التفاعلية 📈
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                        {/* Chart 1: Bar chart for orders */}
+                        <div className="lg:col-span-7 space-y-3">
+                          <div className="flex justify-between items-center">
+                            <span className="text-xs font-black text-slate-800">📊 تفضيلات ومبيعات كل طبق بالمنيو</span>
+                            <span className="text-[10px] text-slate-500 font-semibold">ترتيب تنازلي حسب الأكثر مبيعاً</span>
+                          </div>
+
+                          <div className="h-[250px] w-full" dir="ltr">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart
+                                data={chartData}
+                                margin={{ top: 10, right: 10, left: -25, bottom: 0 }}
+                              >
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+                                <XAxis 
+                                  dataKey="shortName" 
+                                  stroke="#64748B" 
+                                  fontSize={10} 
+                                  fontWeight="bold"
+                                  tickLine={false}
+                                />
+                                <YAxis 
+                                  stroke="#64748B" 
+                                  fontSize={10} 
+                                  fontWeight="bold"
+                                  tickLine={false}
+                                  allowDecimals={false}
+                                />
+                                <RechartsTooltip 
+                                  content={<CustomTooltip />}
+                                  cursor={{ fill: 'rgba(245, 158, 11, 0.04)' }}
+                                />
+                                <Bar dataKey="orders" fill="#F59E0B" radius={[6, 6, 0, 0]} barSize={35}>
+                                  {chartData.map((entry, index) => (
+                                    <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                                  ))}
+                                </Bar>
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </div>
+
+                        {/* Chart 2: Area / Conversion comparison chart */}
+                        <div className="lg:col-span-5 space-y-4 flex flex-col justify-between">
+                          <div className="space-y-1">
+                            <div className="flex justify-between items-center">
+                              <span className="text-xs font-black text-slate-800">🎯 منحنى نجاح تحويل التصفح إلى سلة شراء</span>
+                              <span className="text-[10px] text-slate-500 font-semibold">يقيس الجاذبية التسويقية للوجبة</span>
+                            </div>
+                            <p className="text-[10px] text-slate-400">يقارن بين عدد مشاهدات الوجبة مقابل مرات الإرسال الفعلية للواتساب</p>
+                          </div>
+
+                          <div className="h-[180px] w-full" dir="ltr">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <AreaChart
+                                data={chartData}
+                                margin={{ top: 5, right: 10, left: -25, bottom: 0 }}
+                              >
+                                <defs>
+                                  <linearGradient id="colorOrdersGradient" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="#10B981" stopOpacity={0.3}/>
+                                    <stop offset="95%" stopColor="#10B981" stopOpacity={0.0}/>
+                                  </linearGradient>
+                                  <linearGradient id="colorViewsGradient" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.15}/>
+                                    <stop offset="95%" stopColor="#3B82F6" stopOpacity={0.0}/>
+                                  </linearGradient>
+                                </defs>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+                                <XAxis dataKey="shortName" stroke="#64748B" fontSize={9} fontWeight="bold" tickLine={false} />
+                                <YAxis stroke="#64748B" fontSize={9} fontWeight="bold" tickLine={false} />
+                                <RechartsTooltip content={<CustomTooltip />} />
+                                <Legend 
+                                  verticalAlign="top" 
+                                  height={28} 
+                                  iconSize={8}
+                                  iconType="circle"
+                                  formatter={(value) => {
+                                    if (value === 'views') return <span className="text-[9px] font-bold text-slate-600 pr-3">زيارة المنيو 👁️</span>;
+                                    if (value === 'orders') return <span className="text-[9px] font-bold text-slate-600 pr-3">طلب في السلة 🛒</span>;
+                                    return value;
+                                  }}
+                                />
+                                <Area type="monotone" dataKey="views" name="views" stroke="#3B82F6" strokeWidth={2} fillOpacity={1} fill="url(#colorViewsGradient)" />
+                                <Area type="monotone" dataKey="orders" name="orders" stroke="#10B981" strokeWidth={2} fillOpacity={1} fill="url(#colorOrdersGradient)" />
+                              </AreaChart>
+                            </ResponsiveContainer>
+                          </div>
+
+                          {/* Quick Insight Footnote */}
+                          <div className="bg-slate-50 border border-slate-100 rounded-2xl p-3 flex items-start gap-2 text-[10px]">
+                            <span className="text-amber-600 mt-0.5 shrink-0 font-bold">💡 نصيحة الخبراء:</span>
+                            <p className="text-slate-600 leading-normal text-right">
+                              الأطباق ذات التصفح العالي والطلب المنخفض قد تحتاج لمراجعة الصور لجعلها أكثر إثارة للشهية، أو تقديم عروض حصرية عليها!
+                            </p>
+                          </div>
+                        </div>
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                      {/* Chart 1: Bar chart for orders */}
-                      <div className="lg:col-span-7 space-y-3">
-                        <div className="flex justify-between items-center">
-                          <span className="text-xs font-black text-slate-800">📊 تفضيلات ومبيعات كل طبق بالمنيو</span>
-                          <span className="text-[10px] text-slate-500 font-semibold">ترتيب تنازلي حسب الأكثر مبيعاً</span>
+                    {/* CHART BOX 2: DAILY SALES & TRANSACTIONS DYNAMICS (NEW ADDITION) */}
+                    <div className="bg-white border rounded-3xl p-6 shadow-sm space-y-6">
+                      <div className="pb-3 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                        <div>
+                          <h4 className="text-sm font-black text-slate-900 flex items-center gap-1.5">
+                            <TrendingUp className="w-5 h-5 text-emerald-500 shrink-0" />
+                            مؤشر حجم وأداء المبيعات اليومي الحقيقي 📈
+                          </h4>
+                          <p className="text-[10px] text-slate-400 mt-0.5">مراقبة التذبذبات اليومية لحوكمة التدفق المالي للطلبات الوافدة عبر قنوات الـ QR</p>
                         </div>
-
-                        <div className="h-[250px] w-full" dir="ltr">
-                          <ResponsiveContainer width="100%" height="100%">
-                            <BarChart
-                              data={chartData}
-                              margin={{ top: 10, right: 10, left: -25, bottom: 0 }}
-                            >
-                              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
-                              <XAxis 
-                                dataKey="shortName" 
-                                stroke="#64748B" 
-                                fontSize={10} 
-                                fontWeight="bold"
-                                tickLine={false}
-                              />
-                              <YAxis 
-                                stroke="#64748B" 
-                                fontSize={10} 
-                                fontWeight="bold"
-                                tickLine={false}
-                                allowDecimals={false}
-                              />
-                              <RechartsTooltip 
-                                content={<CustomTooltip />}
-                                cursor={{ fill: 'rgba(245, 158, 11, 0.04)' }}
-                              />
-                              <Bar dataKey="orders" fill="#F59E0B" radius={[6, 6, 0, 0]} barSize={35}>
-                                {chartData.map((entry, index) => (
-                                  <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
-                                ))}
-                              </Bar>
-                            </BarChart>
-                          </ResponsiveContainer>
+                        <div className="text-[10px] font-black bg-emerald-50 text-emerald-800 px-3 py-1 rounded-xl shrink-0 select-none">
+                          بيانات حية مباشرة 📊
                         </div>
                       </div>
 
-                      {/* Chart 2: Area / Conversion comparison chart */}
-                      <div className="lg:col-span-5 space-y-4 flex flex-col justify-between">
-                        <div className="space-y-1">
-                          <div className="flex justify-between items-center">
-                            <span className="text-xs font-black text-slate-800">🎯 منحنى نجاح تحويل التصفح إلى سلة شراء</span>
-                            <span className="text-[10px] text-slate-500 font-semibold">يقيس الجاذبية التسويقية للوجبة</span>
-                          </div>
-                          <p className="text-[10px] text-slate-400">يقارن بين عدد مشاهدات الوجبة مقابل مرات الإرسال الفعلية للواتساب</p>
+                      {/* Summary Metrics Row inside the chart */}
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pb-2">
+                        <div className="bg-slate-50/60 p-3.5 rounded-2xl border border-slate-100">
+                          <span className="text-[10px] text-slate-400 font-bold block">مجموع المبيعات (الدورة)</span>
+                          <span className="text-sm sm:text-base font-sans font-black text-amber-600 mt-1 block">
+                            {dailySalesDynamics.reduce((sum, d) => sum + d.sales, 0)} {restaurant.currency || 'EGP'}
+                          </span>
                         </div>
-
-                        <div className="h-[180px] w-full" dir="ltr">
-                          <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart
-                              data={chartData}
-                              margin={{ top: 5, right: 10, left: -25, bottom: 0 }}
-                            >
-                              <defs>
-                                <linearGradient id="colorOrdersGradient" x1="0" y1="0" x2="0" y2="1">
-                                  <stop offset="5%" stopColor="#10B981" stopOpacity={0.3}/>
-                                  <stop offset="95%" stopColor="#10B981" stopOpacity={0.0}/>
-                                </linearGradient>
-                                <linearGradient id="colorViewsGradient" x1="0" y1="0" x2="0" y2="1">
-                                  <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.15}/>
-                                  <stop offset="95%" stopColor="#3B82F6" stopOpacity={0.0}/>
-                                </linearGradient>
-                              </defs>
-                              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
-                              <XAxis dataKey="shortName" stroke="#64748B" fontSize={9} fontWeight="bold" tickLine={false} />
-                              <YAxis stroke="#64748B" fontSize={9} fontWeight="bold" tickLine={false} />
-                              <RechartsTooltip content={<CustomTooltip />} />
-                              <Legend 
-                                verticalAlign="top" 
-                                height={28} 
-                                iconSize={8}
-                                iconType="circle"
-                                formatter={(value) => {
-                                  if (value === 'views') return <span className="text-[9px] font-bold text-slate-600 pr-3">زيارة المنيو 👁️</span>;
-                                  if (value === 'orders') return <span className="text-[9px] font-bold text-slate-600 pr-3">طلب في السلة 🛒</span>;
-                                  return value;
-                                }}
-                              />
-                              <Area type="monotone" dataKey="views" name="views" stroke="#3B82F6" strokeWidth={2} fillOpacity={1} fill="url(#colorViewsGradient)" />
-                              <Area type="monotone" dataKey="orders" name="orders" stroke="#10B981" strokeWidth={2} fillOpacity={1} fill="url(#colorOrdersGradient)" />
-                            </AreaChart>
-                          </ResponsiveContainer>
+                        <div className="bg-slate-50/60 p-3.5 rounded-2xl border border-slate-100">
+                          <span className="text-[10px] text-slate-400 font-bold block">معدل البيع اليومي</span>
+                          <span className="text-sm sm:text-base font-sans font-black text-emerald-600 mt-1 block">
+                            {Math.round(dailySalesDynamics.reduce((sum, d) => sum + d.sales, 0) / 7)} {restaurant.currency || 'EGP'}
+                          </span>
                         </div>
+                        <div className="bg-slate-50/60 p-3.5 rounded-2xl border border-slate-100">
+                          <span className="text-[10px] text-slate-400 font-bold block">إجمالي المعاملات</span>
+                          <span className="text-sm sm:text-base font-sans font-black text-slate-900 mt-1 block">
+                            {dailySalesDynamics.reduce((sum, d) => sum + d.count, 0)} طلبية
+                          </span>
+                        </div>
+                        <div className="bg-slate-50/60 p-3.5 rounded-2xl border border-slate-100">
+                          <span className="text-[10px] text-slate-400 font-bold block">متوسط الحزمة السعرية</span>
+                          <span className="text-sm sm:text-base font-sans font-black text-purple-600 mt-1 block">
+                            {Math.round(dailySalesDynamics.reduce((sum, d) => sum + d.sales, 0) / (dailySalesDynamics.reduce((sum, d) => sum + d.count, 0) || 1))} {restaurant.currency || 'EGP'}
+                          </span>
+                        </div>
+                      </div>
 
-                        {/* Quick Insight Footnote */}
-                        <div className="bg-slate-50 border border-slate-100 rounded-2xl p-3 flex items-start gap-2 text-[10px]">
-                          <span className="text-amber-600 mt-0.5 shrink-0 font-bold">💡 نصيحة الخبراء:</span>
-                          <p className="text-slate-600 leading-normal text-right">
-                            الأطباق ذات التصفح العالي والطلب المنخفض قد تحتاج لمراجعة الصور لجعلها أكثر إثارة للشهية، أو تقديم عروض حصرية عليها!
+                      <div className="h-[260px] w-full" dir="ltr">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart
+                            data={dailySalesDynamics}
+                            margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
+                          >
+                            <defs>
+                              <linearGradient id="colorSalesTrend" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="#10B981" stopOpacity={0.25}/>
+                                <stop offset="95%" stopColor="#10B981" stopOpacity={0.0}/>
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+                            <XAxis 
+                              dataKey="dateLabel" 
+                              stroke="#64748B" 
+                              fontSize={10} 
+                              fontWeight="bold"
+                              tickLine={false}
+                            />
+                            <YAxis 
+                              stroke="#64748B" 
+                              fontSize={10} 
+                              fontWeight="bold"
+                              tickLine={false}
+                              allowDecimals={false}
+                            />
+                            <RechartsTooltip content={<SalesDynamicsTooltip />} />
+                            <Area 
+                              type="monotone" 
+                              dataKey="sales" 
+                              name="sales" 
+                              stroke="#10B981" 
+                              strokeWidth={3} 
+                              fillOpacity={1} 
+                              fill="url(#colorSalesTrend)" 
+                            />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+
+                    </div>
+
+                    {/* CHART BOX 3: TIME-OF-DAY BEST SELLERS STRATEGIC DESK (NEW INTEGRATION) */}
+                    <div className="bg-white border rounded-3xl p-6 shadow-sm space-y-6">
+                      <div className="pb-3 border-b border-slate-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-2">
+                        <div>
+                          <h4 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                            <Clock className="w-5 h-5 text-indigo-500 shrink-0" />
+                            توزيع مبيعات الأطباق المميزة خلال فترات اليوم المختلفة 🌅
+                          </h4>
+                          <p className="text-[10px] text-slate-400 mt-0.5">
+                            رصد اتجاهات شراء الوجبات خلال ساعات الصباح والظهيرة والمساء والسهرة لمساعدتك في اتخاذ قرارات التجهيز واكتشاف الأنماط السلوكية للزبائن
                           </p>
                         </div>
+                        <div className="text-[10px] font-black bg-indigo-50 text-indigo-800 px-3 py-1 rounded-xl shrink-0 select-none">
+                          تكامل ذكي مستند للوقت ⏰
+                        </div>
+                      </div>
 
+                      <div className="grid grid-cols-1 xl:grid-cols-12 gap-8">
+                        {/* Interactive Stacked Bar Chart */}
+                        <div className="xl:col-span-7 space-y-4">
+                          <div className="flex justify-between items-center">
+                            <span className="text-xs font-black text-slate-800">📊 رسم بياني تراكمي للمبيعات اليومية بالأقسام الزمنية</span>
+                            <span className="text-[10px] text-slate-400 font-bold">ترتيب تنازلي لقمم المبيعات</span>
+                          </div>
+
+                          <div className="h-[280px] w-full" dir="ltr">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart
+                                data={bestSellersDaytimeData}
+                                margin={{ top: 10, right: 10, left: -25, bottom: 0 }}
+                              >
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+                                <XAxis 
+                                  dataKey="shortName" 
+                                  stroke="#64748B" 
+                                  fontSize={10} 
+                                  fontWeight="bold"
+                                  tickLine={false}
+                                />
+                                <YAxis 
+                                  stroke="#64748B" 
+                                  fontSize={10} 
+                                  fontWeight="bold"
+                                  tickLine={false}
+                                  allowDecimals={false}
+                                />
+                                <RechartsTooltip 
+                                  cursor={{ fill: 'rgba(99, 102, 241, 0.04)' }}
+                                  content={({ active, payload }: any) => {
+                                    if (active && payload && payload.length) {
+                                      const data = payload[0].payload;
+                                      return (
+                                        <div className="bg-slate-900 border border-slate-800 text-white p-4 py-3 rounded-2xl shadow-xl text-[11px] text-right space-y-1.5" dir="rtl">
+                                          <p className="font-extrabold text-amber-400 mb-1">{data.name}</p>
+                                          <div className="space-y-1 text-slate-300 font-semibold border-b border-slate-800 pb-2 mb-2">
+                                            <p className="flex justify-between items-center gap-4">
+                                              <span>🌅 مبيعات الصباح (8 ص - 1 م):</span>
+                                              <span className="font-mono text-white font-black">{data['الصباح 🌅']} وحدة</span>
+                                            </p>
+                                            <p className="flex justify-between items-center gap-4">
+                                              <span>☀️ مبيعات الغداء (1 م - 5 م):</span>
+                                              <span className="font-mono text-white font-black">{data['الظهيرة والغداء ☀️']} وحدة</span>
+                                            </p>
+                                            <p className="flex justify-between items-center gap-4">
+                                              <span>🌙 مبيعات العشاء (5 م - 10 م):</span>
+                                              <span className="font-mono text-white font-black">{data['المساء والعشاء 🌙']} وحدة</span>
+                                            </p>
+                                            <p className="flex justify-between items-center gap-4">
+                                              <span>🌟 مبيعات السهرة السريعة (10 م - 4 ف):</span>
+                                              <span className="font-mono text-white font-black">{data['منتصف الليل 🌟']} وحدة</span>
+                                            </p>
+                                          </div>
+                                          <p className="text-emerald-400 font-black flex justify-between items-center text-xs">
+                                            <span>🛍️ إجمالي المبيعات الكلية باليوم:</span>
+                                            <span className="font-mono text-white bg-slate-850 px-2 py-0.5 rounded-md">{data.totalSold} طلب</span>
+                                          </p>
+                                        </div>
+                                      );
+                                    }
+                                    return null;
+                                  }}
+                                />
+                                <Legend 
+                                  verticalAlign="top" 
+                                  height={36} 
+                                  iconSize={9}
+                                  iconType="circle"
+                                  wrapperStyle={{ paddingBottom: '10px' }}
+                                  formatter={(value) => <span className="text-[10px] font-black text-slate-705 pr-2">{value}</span>}
+                                />
+                                <Bar dataKey="الصباح 🌅" stackId="daytime" fill="#3B82F6" radius={[0, 0, 0, 0]} />
+                                <Bar dataKey="الظهيرة والغداء ☀️" stackId="daytime" fill="#F59E0B" radius={[0, 0, 0, 0]} />
+                                <Bar dataKey="المساء والعشاء 🌙" stackId="daytime" fill="#10B981" radius={[0, 0, 0, 0]} />
+                                <Bar dataKey="منتصف الليل 🌟" stackId="daytime" fill="#8B5CF6" radius={[6, 6, 0, 0]} />
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </div>
+
+                        {/* Strategic Advisory Desk Column */}
+                        <div className="xl:col-span-5 flex flex-col justify-between space-y-4">
+                          <div className="space-y-2">
+                            <span className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+                              <Sparkles className="w-4 h-4 text-amber-500 animate-pulse" />
+                              لوحة التوصيات الإستراتيجية الذكية لاتخاذ القرار 💡
+                            </span>
+                            <p className="text-[10px] text-slate-400 leading-normal">
+                              رؤى وأفكار تجارية حية مستخلصة تلقائياً من الإحصائيات الفترية لمطعمك لتحقيق أقصى ربحية ممكنة وحوكمة إبداعية لجدول التشغيل:
+                            </p>
+                          </div>
+
+                          <div className="space-y-3 flex-1">
+                            {/* Recommendation 1: Dynamic Top Seller Highlight */}
+                            <div className="p-3 bg-amber-50/50 border border-amber-100/70 rounded-2xl flex items-start gap-2.5">
+                              <span className="text-base select-none mt-0.5">🏆</span>
+                              <div className="space-y-0.5">
+                                <span className="text-[11px] font-extrabold text-amber-950 block">الطبق بطل المنيو اليوم: {bestSellersDaytimeData[0]?.name ? bestSellersDaytimeData[0].name.substring(0,25) + "..." : 'بطل المنيو'}</span>
+                                <p className="text-[10px] text-amber-800 leading-normal">
+                                  يحقق أعلى فلطحة طلب متراكمة اليوم. نوصي بتثبيت مكانه أعلى شريط المقترحات وتكثيف شراء وتجهيز خاماته الطازجة في مستودع المطبخ تلافياً للنفاد المفاجئ وحفاظاً على ثقة عملائك.
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* Recommendation 2: Lunch high volume analysis */}
+                            <div className="p-3 bg-indigo-50/50 border border-indigo-100/70 rounded-2xl flex items-start gap-2.5">
+                              <span className="text-base select-none mt-0.5">🥪</span>
+                              <div className="space-y-0.5">
+                                <span className="text-[11px] font-extrabold text-indigo-950 block">إستراتيجية وجبات الغداء والظهيرة:</span>
+                                <p className="text-[10px] text-indigo-800 leading-normal">
+                                  بما أن وجبة <span className="font-extrabold">{(bestSellersDaytimeData.sort((a,b) => b['الظهيرة والغداء ☀️'] - a['الظهيرة والغداء ☀️'])[0]?.name || 'الأكثر طلباً').substring(0,20)}...</span> في ذروة الغداء، ننصح بتدشين "عرض غداء عمل" مخفض ومدمج مع فرنش فرايز ومشروب بين الساعة 1 والـ 5 مساءً لرفع العائد الإجمالي للطاولة!
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* Recommendation 3: Night & desserts logic */}
+                            <div className="p-3 bg-purple-50/40 border border-purple-100/60 rounded-2xl flex items-start gap-2.5">
+                              <span className="text-base select-none mt-0.5">🍰</span>
+                              <div className="space-y-0.5">
+                                <span className="text-[11px] font-extrabold text-purple-950 block">حشد مبيعات السهرة والطلبات الليلية:</span>
+                                <p className="text-[10px] text-purple-800 leading-normal">
+                                  تتحول طاقة المستهلكين ليلاً نحو الحلويات والمأكولات الخفيفة. احرص على تعديل جدول الوردية الليلية لتجعل طاقم الطهي في أتم الاستعداد لتلبية سرعة الطلب من المنيو الرقمي السريع وتفادي حدوث تكدس.
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="text-[9px] text-slate-400 text-left pt-2 font-mono">
+                            تم الحساب بناءً على {hasRealLogs ? 'قاعدة بيانات Firestore' : 'النمذجة الرياضية لبيانات السحابة'} ⏱️
+                          </div>
+                        </div>
                       </div>
                     </div>
+
                   </div>
                 );
               })()}
@@ -2991,6 +4339,138 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
                 </div>
               </div>
 
+              {/* Promotional Offer Countdown & Label (Deals management) */}
+              {productForm.isDiscounted && (
+                <div className="bg-amber-50/50 border border-amber-100 p-4 rounded-2xl space-y-3">
+                  <span className="text-xs font-black text-amber-900 flex items-center gap-1.5">
+                    🏷️ إعدادات العرض والمؤقت التنازلي المباشر
+                  </span>
+                  <div className="grid md:grid-cols-2 gap-3.5">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">اسم العرض الترويجي (مثال: خصم 20%)</label>
+                      <input 
+                        type="text" 
+                        value={productForm.discountLabel}
+                        onChange={e => setProductForm({ ...productForm, discountLabel: e.target.value })}
+                        className="w-full bg-white border border-slate-200 outline-none rounded-xl p-2.5 text-xs text-right focus:border-amber-400 focus:ring-1 focus:ring-amber-400 font-bold text-amber-900"
+                        placeholder="خصم 20%، عرض محدود، ليلة الجمعة..."
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">تاريخ ووقت انتهاء العرض (لتشغيل المؤقت التنازلي)</label>
+                      <input 
+                        type="datetime-local" 
+                        value={productForm.discountExpiry}
+                        onChange={e => setProductForm({ ...productForm, discountExpiry: e.target.value })}
+                        className="w-full bg-white border border-slate-200 outline-none rounded-xl p-2.5 text-xs text-center focus:border-amber-400 focus:ring-1 focus:ring-amber-400 font-mono"
+                      />
+                      <span className="text-[9px] text-slate-400 text-center block mt-1">اتركه فارغاً إذا كنت لا ترغب بتشغيل مؤقت تنازلي للعرض.</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* إدارة الأحجام وزيادات السعر */}
+              <div className="bg-slate-50 border border-slate-100 p-4 rounded-2xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-black text-slate-950 flex items-center gap-1.5">
+                    🍕 خيارات الأحجام المتعددة والوزن (زيادة السعر)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const newSize = {
+                        id: `size-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+                        name: '',
+                        nameEn: '',
+                        priceAdded: 0
+                      };
+                      setProductForm({
+                        ...productForm,
+                        sizes: [...(productForm.sizes || []), newSize]
+                      });
+                    }}
+                    className="bg-slate-950 text-white text-[10px] font-black px-2.5 py-1.5 rounded-lg flex items-center gap-1 hover:bg-slate-850 transition cursor-pointer"
+                  >
+                    <Plus className="w-3 h-3" />
+                    إضافة حجم جديد
+                  </button>
+                </div>
+                
+                <p className="text-[10px] text-slate-400 leading-relaxed">
+                  مثال: حجم كبير مع زيادة سعر +١٠ ووسط مع زيادة سعر +٥. الحجم الأساسي لطبقك هو السعر الأساسي للطبق.
+                </p>
+
+                {productForm.sizes && productForm.sizes.length > 0 ? (
+                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                    {productForm.sizes.map((size, index) => (
+                      <div key={size.id} className="bg-white border border-slate-100 p-2.5 rounded-xl flex items-center gap-2 relative">
+                        <div className="grid grid-cols-3 gap-2 flex-grow">
+                          <div>
+                            <label className="block text-[8px] font-bold text-slate-500 mb-0.5">الحجم بالعربي</label>
+                            <input
+                              type="text"
+                              value={size.name}
+                              onChange={e => {
+                                const updated = [...productForm.sizes];
+                                updated[index].name = e.target.value;
+                                setProductForm({ ...productForm, sizes: updated });
+                              }}
+                              placeholder="مثال: كبير"
+                              className="w-full bg-slate-50 border border-slate-200 outline-none rounded-lg p-1.5 text-[10px] text-right font-bold text-slate-800 focus:bg-white focus:border-amber-400"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[8px] font-bold text-slate-500 mb-0.5">الحجم بالإنجليزي</label>
+                            <input
+                              type="text"
+                              value={size.nameEn || ''}
+                              onChange={e => {
+                                const updated = [...productForm.sizes];
+                                updated[index].nameEn = e.target.value;
+                                setProductForm({ ...productForm, sizes: updated });
+                              }}
+                              placeholder="e.g. Large"
+                              className="w-full bg-slate-50 border border-slate-200 outline-none rounded-lg p-1.5 text-[10px] text-left font-sans text-slate-800 focus:bg-white focus:border-amber-400"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[8px] font-bold text-slate-500 mb-0.5">زيادة السعر (ريال/جنية)</label>
+                            <input
+                              type="number"
+                              min="0"
+                              step="any"
+                              value={size.priceAdded || ''}
+                              onChange={e => {
+                                const updated = [...productForm.sizes];
+                                updated[index].priceAdded = Number(e.target.value) || 0;
+                                setProductForm({ ...productForm, sizes: updated });
+                              }}
+                              placeholder="+0"
+                              className="w-full bg-slate-50 border border-slate-200 outline-none rounded-lg p-1.5 text-[10px] text-center font-mono font-bold text-slate-800 focus:bg-white focus:border-amber-400"
+                            />
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updated = productForm.sizes.filter(s => s.id !== size.id);
+                            setProductForm({ ...productForm, sizes: updated });
+                          }}
+                          className="p-1 px-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition shrink-0 mt-3 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="border border-dashed border-slate-200 rounded-xl p-3 text-center text-[10px] text-slate-400 font-bold bg-white/40">
+                    لم يتم إضافة خيارات أحجام مخصصة للوجبة بعد. سيظهر الحجم والوزن الافتراضي فقط بالسعر الأساسي.
+                  </div>
+                )}
+              </div>
+
               {/* Product Photo section with predefined beautiful presets */}
               <div className="space-y-3">
                 <label className="block text-xs font-bold text-slate-700">صورة الوجبة التفاعلية 📸</label>
@@ -3317,14 +4797,15 @@ interface FloatingNotificationProps {
   lang: 'ar' | 'en';
   currency: string;
   onDismiss: (id: string) => void;
-  onViewStats: () => void;
+  onViewOrders: () => void;
+  onUpdateStatus: (orderId: string, status: 'pending' | 'preparing' | 'completed') => void;
 }
 
-function FloatingNotification({ notif, lang, currency, onDismiss, onViewStats }: FloatingNotificationProps) {
+function FloatingNotification({ notif, lang, currency, onDismiss, onViewOrders, onUpdateStatus }: FloatingNotificationProps) {
   useEffect(() => {
     const timer = setTimeout(() => {
       onDismiss(notif.id!);
-    }, 8000);
+    }, 12000); // Expose slightly longer since there are interactive buttons!
     return () => clearTimeout(timer);
   }, [notif.id, onDismiss]);
 
@@ -3334,11 +4815,11 @@ function FloatingNotification({ notif, lang, currency, onDismiss, onViewStats }:
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, x: 100, scale: 0.9 }}
       transition={{ type: 'spring', damping: 20, stiffness: 300 }}
-      className="pointer-events-auto bg-slate-900 border border-slate-800 text-white rounded-2xl shadow-2xl p-4 flex flex-col gap-2 relative overflow-hidden backdrop-blur-md"
+      className="pointer-events-auto bg-slate-900 border border-slate-700/60 text-white rounded-2xl shadow-2xl p-4 flex flex-col gap-2 relative overflow-hidden backdrop-blur-md"
       dir={lang === 'ar' ? 'rtl' : 'ltr'}
     >
       {/* Top Accent Line */}
-      <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-500 to-rose-500 animate-pulse" />
+      <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-500 via-yellow-400 to-indigo-600 animate-pulse" />
 
       {/* Header */}
       <div className="flex items-center justify-between gap-4 mt-1">
@@ -3348,9 +4829,11 @@ function FloatingNotification({ notif, lang, currency, onDismiss, onViewStats }:
           </div>
           <div>
             <h4 className="text-xs font-black text-white">
-              {lang === 'ar' ? '🛎️ طلب واتساب جديد نشط!' : '🛎️ New WhatsApp Order Active!'}
+              {lang === 'ar' ? '🛎️ طلب طاولة جديد وارد الآن!' : '🛎️ New Table Order Received Now!'}
             </h4>
-            <span className="text-[10px] text-slate-400 font-mono font-sans">{notif.createdAt || notif.timestamp}</span>
+            <span className="text-[10px] text-slate-400 font-mono font-sans">
+              {notif.tableName} • {lang === 'ar' ? 'قيد الانتظار ⏳' : 'Pending ⏳'}
+            </span>
           </div>
         </div>
         <button
@@ -3388,16 +4871,22 @@ function FloatingNotification({ notif, lang, currency, onDismiss, onViewStats }:
         )}
       </div>
 
-      {/* Action Trigger inside Notification */}
-      <div className="flex items-center justify-between gap-2 mt-1">
-        <span className="text-[10px] bg-emerald-500/15 text-emerald-400 font-bold px-2 py-0.5 rounded-md border border-emerald-500/20">
-          {lang === 'ar' ? 'تنبيه ذكي سحابي 🌐' : 'Cloud Smart Notification 🌐'}
-        </span>
+      {/* Action Triggers in Notification */}
+      <div className="flex items-center justify-between gap-2 mt-1 pt-1 border-t border-slate-800/80">
         <button
-          onClick={onViewStats}
-          className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-[10px] py-1 px-2.5 rounded-lg transition shrink-0 cursor-pointer"
+          onClick={() => {
+            onUpdateStatus(notif.id!, 'preparing');
+            onDismiss(notif.id!);
+          }}
+          className="bg-indigo-600 hover:bg-indigo-700 text-white font-black text-[10px] py-1.5 px-3 rounded-lg transition overflow-hidden"
         >
-          {lang === 'ar' ? 'عرض السلة 📊' : 'View Stats 📊'}
+          {lang === 'ar' ? 'قبول وبدء التحضير 🍳' : 'Accept & Cook 🍳'}
+        </button>
+        <button
+          onClick={onViewOrders}
+          className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-black text-[10px] py-1.5 px-3 rounded-lg transition shrink-0 cursor-pointer"
+        >
+          {lang === 'ar' ? 'عرض تذاكر المطبخ 📋' : 'View in Tickets 📋'}
         </button>
       </div>
     </motion.div>

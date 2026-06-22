@@ -32,7 +32,7 @@ import {
   increment
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
-import { Restaurant, Category, Product, Order, ViewLog } from './types';
+import { Restaurant, Category, Product, Order, ViewLog, Shift } from './types';
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
@@ -270,14 +270,91 @@ export async function logMenuView(restaurantId: string): Promise<void> {
   }
 }
 
-// Log an order event inside the subcollection
-export async function logOrder(restaurantId: string, orderData: Omit<Order, 'id'>): Promise<void> {
+// Log an order event inside the subcollection and return doc ID
+export async function logOrder(restaurantId: string, orderData: Omit<Order, 'id'>): Promise<string> {
   try {
     const colRef = collection(db, 'restaurants', restaurantId, 'orders');
     const docRef = doc(colRef);
-    await setDoc(docRef, cleanUndefined(orderData));
+    const updatedData = {
+      ...orderData,
+      status: orderData.status || 'pending'
+    };
+    await setDoc(docRef, cleanUndefined(updatedData));
+    return docRef.id;
   } catch (error) {
     console.warn("Could not log order doc", error);
+    return '';
+  }
+}
+
+// Update the status of an order
+export async function updateOrderStatus(
+  restaurantId: string,
+  orderId: string,
+  status: 'pending' | 'preparing' | 'completed'
+): Promise<void> {
+  try {
+    const docRef = doc(db, 'restaurants', restaurantId, 'orders', orderId);
+    await updateDoc(docRef, { status });
+  } catch (error) {
+    console.error("Could not update order status:", error);
+  }
+}
+
+// Update the settlement status of an order (تصفية حساب الشيف للكاشير)
+export async function updateOrderSettlementStatus(
+  restaurantId: string,
+  orderId: string,
+  isSettled: boolean
+): Promise<void> {
+  try {
+    const docRef = doc(db, 'restaurants', restaurantId, 'orders', orderId);
+    await updateDoc(docRef, { 
+      isSettled, 
+      settledAt: isSettled ? new Date().toISOString() : null 
+    });
+  } catch (error) {
+    console.error("Could not update order settlement status:", error);
+  }
+}
+
+// Log a completed shift to history (حفظ الوردية المصفرة)
+export async function logShift(restaurantId: string, shiftData: Omit<Shift, "id">): Promise<string> {
+  try {
+    const colRef = collection(db, "restaurants", restaurantId, "shifts");
+    const docRef = doc(colRef);
+    await setDoc(docRef, cleanUndefined(shiftData));
+    return docRef.id;
+  } catch (error) {
+    console.error("Could not log shift to db:", error);
+    throw error;
+  }
+}
+
+// Retrieve past shifts of the restaurant
+export async function getShifts(restaurantId: string): Promise<Shift[]> {
+  const colRef = collection(db, "restaurants", restaurantId, "shifts");
+  const q = query(colRef, orderBy("closedAt", "desc"));
+  try {
+    const snap = await getDocs(q);
+    return snap.docs.map(d => ({ id: d.id, ...d.data() } as Shift));
+  } catch (error) {
+    console.warn("Could not retrieve shifts history", error);
+    return [];
+  }
+}
+
+// Clear all active orders in firestore to start a fresh shift (بدء وردية جديدة)
+export async function clearShiftOrders(restaurantId: string): Promise<void> {
+  try {
+    const colRef = collection(db, "restaurants", restaurantId, "orders");
+    const snap = await getDocs(colRef);
+    for (const d of snap.docs) {
+      await deleteDoc(doc(db, "restaurants", restaurantId, "orders", d.id));
+    }
+  } catch (error) {
+    console.error("Could not clear active orders:", error);
+    throw error;
   }
 }
 
