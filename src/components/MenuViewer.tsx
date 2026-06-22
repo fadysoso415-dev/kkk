@@ -662,9 +662,9 @@ export default function MenuViewer({ restaurantSlug, onBackToLanding, lang: init
         ((!item.selectedSize && !selectedSize) || (item.selectedSize?.id === selectedSize?.id))
       );
       if (existingIdx > -1) {
-        const copy = [...prev];
-        copy[existingIdx].quantity += 1;
-        return copy;
+        return prev.map((item, i) => 
+          i === existingIdx ? { ...item, quantity: item.quantity + 1 } : item
+        );
       }
       return [...prev, { product, quantity: 1, selectedSize }];
     });

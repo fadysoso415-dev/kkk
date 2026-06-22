@@ -40,7 +40,9 @@ import {
   Laptop,
   Percent,
   ShoppingBag,
-  Palette
+  Palette,
+  Receipt,
+  Printer
 } from 'lucide-react';
 import { Restaurant, Category, Product, Order, ViewLog, Shift, ProductSize } from '../types';
 import { 
@@ -58,6 +60,7 @@ import {
   clearShiftOrders
 } from '../firebase';
 import { SAMPLE_RESTAURANTS, SAMPLE_CATEGORIES, SAMPLE_PRODUCTS } from '../sampleData';
+import CashierPOS from './CashierPOS';
 import { 
   BarChart, 
   Bar, 
@@ -162,7 +165,7 @@ const compressAndResizeImage = (file: File, maxDimension: number = 800): Promise
 };
 
 export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, lang, onChangeLang }: DashboardProps) {
-  const [activeTab, setActiveTab] = useState<'settings' | 'categories' | 'products' | 'qrcode' | 'analytics' | 'orders' | 'accounts'>('settings');
+  const [activeTab, setActiveTab] = useState<'settings' | 'categories' | 'products' | 'qrcode' | 'analytics' | 'orders' | 'accounts' | 'pos'>('settings');
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
     const saved = localStorage.getItem('menuclick_sound_enabled');
     return saved !== null ? saved === 'true' : true;
@@ -235,6 +238,167 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [loadingShifts, setLoadingShifts] = useState(false);
   const [showShiftConfirmModal, setShowShiftConfirmModal] = useState(false);
+
+  const printOrderReceipt = (order: Order) => {
+    const printWindow = window.open('', '_blank', 'width=350,height=600');
+    if (!printWindow) return;
+
+    const itemsHtml = order.items.map((it) => `
+      <tr>
+        <td style="text-align: right; padding: 6px 0; font-size: 11px;">
+          ${it.name}
+          ${it.size ? `<br><small style="color: #666;">(${it.size})</small>` : ''}
+        </td>
+        <td style="text-align: center; padding: 6px 0; font-size: 11px;">x${it.quantity}</td>
+        <td style="text-align: left; padding: 6px 0; font-style: normal; font-size: 11px;">${(it.price * it.quantity).toFixed(2)}</td>
+      </tr>
+    `).join('');
+
+    const formattedDate = order.timestamp 
+      ? new Date(order.timestamp).toLocaleString('ar-EG', {
+          timeZone: 'Africa/Cairo',
+          hour12: true,
+          year: 'numeric',
+          month: 'numeric',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        })
+      : new Date().toLocaleString('ar-EG', {
+          timeZone: 'Africa/Cairo',
+          hour12: true,
+          year: 'numeric',
+          month: 'numeric',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+
+    const displayTax = (order as any).taxAmount || 0;
+    const displayDiscount = (order as any).discountAmount || 0;
+    const baseTotal = order.totalPrice - displayTax + displayDiscount;
+
+    const paymentMethodText = (order as any).paymentMethod === 'card' 
+      ? 'بطاقة / شبكة 💳' 
+      : (order as any).paymentMethod === 'due' 
+        ? 'على الحساب / ذمم 🤵' 
+        : 'نقداً 💵';
+
+    const orderTypeText = (order as any).orderType === 'takeaway' 
+      ? '(سفري)' 
+      : (order as any).orderType === 'delivery' 
+        ? '(توصيل)' 
+        : '(صالة)';
+
+    const html = `
+      <html>
+        <head>
+          <title>فاتورة مبيعات - ${restaurant.name}</title>
+          <style>
+            @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
+            body { 
+              font-family: 'Cairo', sans-serif; 
+              width: 80mm; 
+              margin: 0 auto; 
+              padding: 10px; 
+              direction: rtl; 
+              text-align: right; 
+              color: #000; 
+              font-size: 11px;
+            }
+            .text-center { text-align: center; }
+            .logo { max-width: 60px; max-height: 60px; border-radius: 8px; margin-bottom: 5px; }
+            .header { text-align: center; margin-bottom: 12px; }
+            .header h1 { font-size: 14px; margin: 0 0 4px 0; font-weight: bold; }
+            .header p { font-size: 10px; margin: 0; color: #444; }
+            .divider { border-top: 1px dashed #000; margin: 8px 0; }
+            table { width: 100%; border-collapse: collapse; }
+            th { border-bottom: 1px solid #000; padding: 5px 0; font-size: 10px; font-weight: bold; }
+            .total-row { font-weight: bold; font-size: 12px; }
+            .meta p { margin: 2px 0; font-size: 10px; }
+            .notes { margin-top: 10px; font-size: 9px; color: #555; background: #eee; padding: 4px; border-radius: 4px; }
+            .footer { text-align: center; font-size: 9px; margin-top: 20px; color: #555; line-height: 1.4; }
+            @media print {
+              body { width: 100%; margin: 0; padding: 5px; }
+              @page { size: auto; margin: 0mm; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            ${restaurant.logo ? `<img class="logo" src="${restaurant.logo}" />` : ''}
+            <h1>${restaurant.name}</h1>
+            <p>فاتورة مبيعات مبسطة لزبون ونقاط البيع</p>
+          </div>
+          
+          <div class="meta">
+            <p><b>رقم الطلب:</b> ${(order.id || '').toUpperCase().slice(0, 10)}</p>
+            <p><b>التاريخ:</b> ${formattedDate}</p>
+            <p><b>نوع الطلب:</b> ${order.tableName} ${orderTypeText}</p>
+            <p><b>طريقة الدفع:</b> ${paymentMethodText}</p>
+          </div>
+
+          <div class="divider"></div>
+
+          <table>
+            <thead>
+              <tr>
+                <th style="text-align: right;">الصنف</th>
+                <th style="text-align: center; width: 40px;">الكمية</th>
+                <th style="text-align: left; width: 60px;">السعر</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${itemsHtml}
+            </tbody>
+          </table>
+
+          <div class="divider"></div>
+
+          <table>
+            <tr>
+              <td style="font-size: 10px;">المجموع الفرعي:</td>
+              <td style="text-align: left; font-size: 10px;">${baseTotal.toFixed(2)} ${restaurant.currency || 'ج.م'}</td>
+            </tr>
+            ${displayDiscount > 0 ? `
+            <tr>
+              <td style="font-size: 10px; color: red;">خصم الكاشير:</td>
+              <td style="text-align: left; font-size: 10px; color: red;">-${displayDiscount.toFixed(2)} ${restaurant.currency || 'ج.م'}</td>
+            </tr>
+            ` : ''}
+            ${displayTax > 0 ? `
+            <tr>
+              <td style="font-size: 10px;">الضريبة والخدمة (14%):</td>
+              <td style="text-align: left; font-size: 10px;">${displayTax.toFixed(2)} ${restaurant.currency || 'ج.م'}</td>
+            </tr>
+            ` : ''}
+            <tr class="total-row">
+              <td style="font-size: 12px;">الإجمالي الكلي:</td>
+              <td style="text-align: left; font-size: 12px;">${order.totalPrice.toFixed(2)} ${restaurant.currency || 'ج.م'}</td>
+            </tr>
+          </table>
+
+          ${order.notes ? `<div class="notes"><b>ملاحظات:</b> ${order.notes}</div>` : ''}
+
+          <div class="divider"></div>
+          <div class="footer">
+            شكراً لتعاملكم معنا ونتمنى لكم وجبة شهية!<br>
+            نظام محاسبة ذكي مدمج ⚡🧾
+          </div>
+
+          <script>
+            window.onload = function() {
+              window.print();
+              setTimeout(function() { window.close(); }, 600);
+            };
+          </script>
+        </body>
+      </html>
+    `;
+
+    printWindow.document.write(html);
+    printWindow.document.close();
+  };
 
   // Synchronize sound option changes and load mock orders if in testing/demo mode
   useEffect(() => {
@@ -1528,6 +1692,17 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
         </button>
 
         <button
+          onClick={() => setActiveTab('pos')}
+          className={`flex-1 flex flex-col items-center justify-center gap-1 h-full relative cursor-pointer ${activeTab === 'pos' ? 'text-amber-500 font-black' : 'text-slate-400 hover:text-slate-200'}`}
+        >
+          <Receipt className="w-[18px] h-[18px] text-emerald-400" />
+          <span className="text-[9px] tracking-tight">{lang === 'ar' ? 'الكاشير' : 'POS'}</span>
+          {activeTab === 'pos' && (
+            <motion.div layoutId="mobile-nav-indicator" className="absolute bottom-1 w-5 h-0.5 bg-amber-500 rounded-full" />
+          )}
+        </button>
+
+        <button
           onClick={() => setActiveTab('orders')}
           className={`flex-1 flex flex-col items-center justify-center gap-1 h-full relative cursor-pointer ${activeTab === 'orders' ? 'text-amber-500 font-black' : 'text-slate-400 hover:text-slate-200'}`}
         >
@@ -1632,6 +1807,15 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
             </button>
 
             <button
+              id="sidebar_pos_btn"
+              onClick={() => setActiveTab('pos')}
+              className={`w-full py-3 px-4 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-3 cursor-pointer transition duration-150 ${activeTab === 'pos' ? 'bg-amber-500 text-white shadow-lg shadow-amber-500/15' : 'hover:bg-slate-800 hover:text-white'}`}
+            >
+              <Receipt className="w-4.5 h-4.5 text-emerald-405" />
+              منصة الكاشير ونقاط البيع POS 🎰
+            </button>
+
+            <button
               onClick={() => setActiveTab('orders')}
               className={`w-full py-3 px-4 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-3 cursor-pointer transition duration-150 relative ${activeTab === 'orders' ? 'bg-amber-500 text-white shadow-lg shadow-amber-500/15' : 'hover:bg-slate-800 hover:text-white'}`}
             >
@@ -1700,6 +1884,9 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
               {activeTab === 'products' && 'لوحة المنتجات والتحكم اليدوي'}
               {activeTab === 'qrcode' && 'تفريغ وتنسيق رمز الـ QR'}
               {activeTab === 'analytics' && 'متابعة إحصائيات المنيو وتفاعلات الزبائن 📊'}
+              {activeTab === 'pos' && 'نظام الكاشير المباشر والمبيعات 🖥️'}
+              {activeTab === 'orders' && 'إدارة طلبات المطبخ والزبائن الحية 🛎️'}
+              {activeTab === 'accounts' && 'تصفية الحسابات وإغلاق الوردية 💰'}
             </h3>
             <p className="text-xs text-slate-500 mt-1">
               اسم المطعم المفعل حالياً: {restaurant.name} (رابط مخصص: ?menu={restaurant.slug})
@@ -1726,6 +1913,29 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
         </div>
 
         {/* TAB WORKSPACE ROUTER */}
+        
+        {/* TAB POS: DIRECT CASHIER SYSTEM */}
+        {activeTab === 'pos' && (
+          <CashierPOS
+            restaurant={restaurant}
+            categories={categories}
+            products={products}
+            onSaveOrder={async (orderData) => {
+              if (isDemo) {
+                const mockID = 'demo-pos-' + Math.random().toString(36).substring(2, 9);
+                const localOrderObj: Order = { id: mockID, ...orderData };
+                setOrders(prev => [localOrderObj, ...prev]);
+                triggerAlert('success', 'تم محاكاة حفظ طلب الكاشير محلياً بنجاح! 💰🍕');
+                return mockID;
+              }
+              const { logOrder } = await import('../firebase');
+              const orderId = await logOrder(restaurant.id, orderData);
+              triggerAlert('success', 'تم حفظ وطباعة طلب الكاشير ومزامنته بالداتا بنجاح! 🖨️🧾');
+              return orderId;
+            }}
+            lang={lang}
+          />
+        )}
         
         {/* TAB 1: SETTINGS */}
         {activeTab === 'settings' && (
@@ -2657,6 +2867,15 @@ export default function Dashboard({ user, isDemo, onLogout, onNavigateToMenu, la
                               <span className="text-xs font-black text-slate-900">{order.totalPrice} {restaurant.currency}</span>
                             </div>
                             <div className="flex gap-1.5 font-sans">
+                              <button
+                                type="button"
+                                onClick={() => printOrderReceipt(order)}
+                                className="bg-amber-50 hover:bg-amber-100 text-amber-600 border border-amber-200/40 p-2 rounded-lg font-bold cursor-pointer transition flex items-center justify-center gap-1"
+                                title="طباعة الفاتورة 🖨️"
+                              >
+                                <Printer className="w-3.5 h-3.5" />
+                                <span className="hidden sm:inline text-[9px]">طباعة الفاتورة</span>
+                              </button>
                               {isPending && (
                                 <button
                                   type="button"

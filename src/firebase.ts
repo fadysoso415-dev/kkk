@@ -295,7 +295,7 @@ export async function updateOrderStatus(
 ): Promise<void> {
   try {
     const docRef = doc(db, 'restaurants', restaurantId, 'orders', orderId);
-    await updateDoc(docRef, { status });
+    await setDoc(docRef, { status }, { merge: true });
   } catch (error) {
     console.error("Could not update order status:", error);
   }
@@ -309,10 +309,10 @@ export async function updateOrderSettlementStatus(
 ): Promise<void> {
   try {
     const docRef = doc(db, 'restaurants', restaurantId, 'orders', orderId);
-    await updateDoc(docRef, { 
+    await setDoc(docRef, { 
       isSettled, 
       settledAt: isSettled ? new Date().toISOString() : null 
-    });
+    }, { merge: true });
   } catch (error) {
     console.error("Could not update order settlement status:", error);
   }
