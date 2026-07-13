@@ -12,6 +12,7 @@ import LandingPage from './components/LandingPage';
 import LoginPage from './components/LoginPage';
 import Dashboard from './components/Dashboard';
 import MenuViewer from './components/MenuViewer';
+import InventoryManager from './components/InventoryManager';
 
 export default function App() {
   const [page, setPage] = useState<string>('landing');
@@ -130,6 +131,7 @@ export default function App() {
           isDemo={isDemo}
           onLogout={handleLogout}
           onNavigateToMenu={(slug) => handleNavigate('menu', slug)}
+          onNavigateToInventory={() => handleNavigate('inventory')}
           lang={lang}
           onChangeLang={setLang}
         />
@@ -141,6 +143,41 @@ export default function App() {
           onBackToLanding={() => handleNavigate('landing')}
           lang={lang}
         />
+      )}
+
+      {page === 'inventory' && (
+        <div className="min-h-screen bg-slate-50 p-6">
+          <div className="max-w-7xl mx-auto">
+            {/* Header with Back Button */}
+            <div className="mb-8 flex items-center justify-between">
+              <div>
+                <h1 className="text-3xl font-black text-slate-900" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+                  {lang === 'ar' ? 'إدارة المخزون' : 'Inventory Management'}
+                </h1>
+                <p className="text-sm text-slate-500 mt-1">
+                  {lang === 'ar' ? 'إدارة المخزون والأصناف المتوفرة' : 'Manage your inventory and products'}
+                </p>
+              </div>
+              <button
+                onClick={() => handleNavigate('dashboard')}
+                className="px-6 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-xl transition"
+              >
+                {lang === 'ar' ? '← العودة' : 'Back →'}
+              </button>
+            </div>
+
+            {/* InventoryManager Component */}
+            <InventoryManager
+              restaurant={{} as any}
+              products={[]}
+              categories={[]}
+              onUpdateProduct={async () => {}}
+              onUpdateRestaurant={async () => {}}
+              isDemo={isDemo}
+              lang={lang}
+            />
+          </div>
+        </div>
       )}
     </div>
   );
