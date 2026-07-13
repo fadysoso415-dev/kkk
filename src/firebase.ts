@@ -301,6 +301,17 @@ export async function updateOrderStatus(
   }
 }
 
+// Delete an order
+export async function deleteOrder(restaurantId: string, orderId: string): Promise<void> {
+  try {
+    const docRef = doc(db, 'restaurants', restaurantId, 'orders', orderId);
+    await deleteDoc(docRef);
+  } catch (error) {
+    console.error("Could not delete order:", error);
+    throw error;
+  }
+}
+
 // Update the settlement status of an order (تصفية حساب الشيف للكاشير)
 export async function updateOrderSettlementStatus(
   restaurantId: string,

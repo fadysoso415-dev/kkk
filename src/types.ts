@@ -33,6 +33,20 @@ export interface Restaurant {
   whatsappGreetingText?: string;
   whatsappGreetingTextEn?: string;
   whatsappUseCustomNumber?: boolean;
+  enableAutoInventory?: boolean;
+  enableQuickFilters?: boolean;
+  qf1Active?: boolean;
+  qf1Name?: string;
+  qf1Icon?: string;
+  qf1Keywords?: string;
+  qf2Active?: boolean;
+  qf2Name?: string;
+  qf2Icon?: string;
+  qf2Keywords?: string;
+  qf3Active?: boolean;
+  qf3Name?: string;
+  qf3Icon?: string;
+  qf3Keywords?: string;
 }
 
 export interface Category {
@@ -69,6 +83,9 @@ export interface Product {
   discountLabel?: string;
   discountExpiry?: string;
   sizes?: ProductSize[];
+  trackInventory?: boolean;
+  stockQuantity?: number;
+  alertLowStock?: number;
 }
 
 export interface CartItem {

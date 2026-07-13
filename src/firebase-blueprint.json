@@ -1,0 +1,153 @@
+{
+  "entities": {
+    "Restaurant": {
+      "title": "Restaurant",
+      "description": "Information about a multi-tenant restaurant and its menu settings.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "description": "The UID of the registered restaurant owner" },
+        "slug": { "type": "string", "description": "URL slug of the restaurant (unique)" },
+        "name": { "type": "string", "description": "Human-readable restaurant name" },
+        "logo": { "type": "string", "format": "uri", "description": "URL of restaurant logo" },
+        "cover": { "type": "string", "format": "uri", "description": "URL of restaurant hero cover image" },
+        "phoneNumber": { "type": "string", "description": "WhatsApp contact number with country code, e.g., +201000000000" },
+        "currency": { "type": "string", "description": "Currency abbreviation (e.g., EGP, SAR, USD)" },
+        "address": { "type": "string", "description": "Physical restaurant address" },
+        "subscriptionType": { "type": "string", "enum": ["free", "premium", "enterprise"], "description": "SaaS Tier status" },
+        "welcomeTitle": { "type": "string", "description": "Landing banner welcome title for the customer menu viewer" },
+        "welcomeSubtitle": { "type": "string", "description": "Landing banner brief description" },
+        "viewsCount": { "type": "integer", "description": "Total views for the restaurant menu" },
+        "whatsappOrdersCount": { "type": "integer", "description": "Total clicks to send WhatsApp order" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp when the restaurant settings were created" },
+        "primaryColor": { "type": "string", "description": "Hex or CSS color for buttons and highlights" },
+        "backgroundColor": { "type": "string", "description": "Hex or CSS color for background" },
+        "themePreset": { "type": "string", "enum": ["amber", "emerald", "rose", "indigo", "slate", "violet", "dark", "autumn", "coffee"], "description": "Active color theme preset name" }
+      },
+      "required": ["ownerUid", "slug", "name", "phoneNumber", "currency", "subscriptionType"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Menu category/division grouping under a specific restaurant.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Category name (e.g., Pizzas, Desserts)" },
+        "order": { "type": "integer", "description": "Sorting priority number" },
+        "isActive": { "type": "boolean", "description": "Visibility flag in customer web app menu" }
+      },
+      "required": ["name", "order", "isActive"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Specific food item or beverage variant on the menu.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Product name" },
+        "description": { "type": "string", "description": "Quick description, ingredients, calories details" },
+        "price": { "type": "number", "description": "Selling retail price" },
+        "originalPrice": { "type": "number", "description": "Original non-discounted retail price" },
+        "isDiscounted": { "type": "boolean", "description": "Is this product currently discounted or on promotion" },
+        "discountPrice": { "type": "number", "description": "Alternative discount price to display" },
+        "image": { "type": "string", "format": "uri", "description": "Product thumbnail/full photo URL" },
+        "categoryId": { "type": "string", "description": "Linked category document ID" },
+        "isAvailable": { "type": "boolean", "description": "In stock/is active on menu" },
+        "badge": { "type": "string", "description": "Ribbon text like HOT, NEW, VEGAN" },
+        "order": { "type": "integer", "description": "Sorting priority number within category" },
+        "discountLabel": { "type": "string", "description": "Text labels for discount offer, e.g. -20% or Friday Madness" },
+        "discountExpiry": { "type": "string", "description": "ISO datetime string when the discount offer expires" },
+        "sizes": {
+          "type": "array",
+          "description": "List of available sizes and their respective price additions",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "nameEn": { "type": "string" },
+              "priceAdded": { "type": "number" }
+            },
+            "required": ["id", "name", "priceAdded"]
+          }
+        }
+      },
+      "required": ["name", "price", "categoryId", "isAvailable", "order"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "WhatsApp order details stored for analytics and tracking.",
+      "type": "object",
+      "properties": {
+        "tableName": { "type": "string", "description": "Customer name or table number" },
+        "totalPrice": { "type": "number", "description": "Total checkout price" },
+        "notes": { "type": "string", "description": "Customer comments or requests" },
+        "timestamp": { "type": "string", "format": "date-time", "description": "Order creation timestamp" },
+        "items": {
+          "type": "array",
+          "description": "List of ordered products",
+          "items": {
+            "type": "object",
+            "properties": {
+              "productId": { "type": "string" },
+              "name": { "type": "string" },
+              "price": { "type": "number" },
+              "quantity": { "type": "integer" },
+              "size": { "type": "string" }
+            }
+          }
+        }
+      },
+      "required": ["tableName", "totalPrice", "timestamp", "items"]
+    },
+    "ViewLog": {
+      "title": "ViewLog",
+      "description": "Log of customer visits to the digital menu.",
+      "type": "object",
+      "properties": {
+        "timestamp": { "type": "string", "format": "date-time", "description": "Visit timestamp as ISO String" },
+        "device": { "type": "string", "enum": ["iPhone", "Android", "Desktop", "Other"] },
+        "userAgent": { "type": "string" },
+        "referrer": { "type": "string" }
+      },
+      "required": ["timestamp", "device"]
+    },
+    "Shift": {
+      "title": "Shift",
+      "description": "Shift report logged historical data of closed shifts.",
+      "type": "object",
+      "properties": {
+        "closedAt": { "type": "string", "format": "date-time", "description": "Timestamp when the shift has been finalized and closed" },
+        "totalOrders": { "type": "integer", "description": "Total count of orders completed/placed during shift" },
+        "totalSales": { "type": "number", "description": "Sum of prices of all orders placed during shift" },
+        "settledSales": { "type": "number", "description": "Total amount paid or settled in cashier box" },
+        "unsettledSales": { "type": "number", "description": "Total unpaid or active balances remaining when closing" },
+        "employeeName": { "type": "string", "description": "Name or email of the employee in duty" }
+      },
+      "required": ["closedAt", "totalOrders", "totalSales", "settledSales", "unsettledSales"]
+    }
+  },
+  "firestore": {
+    "/restaurants/{restaurantId}": {
+      "schema": "Restaurant",
+      "description": "Primary multi-tenant restaurants collection"
+    },
+    "/restaurants/{restaurantId}/categories/{categoryId}": {
+      "schema": "Category",
+      "description": "Categories subcollection for custom menu grouping"
+    },
+    "/restaurants/{restaurantId}/products/{productId}": {
+      "schema": "Product",
+      "description": "Products subcollection reflecting individual dishes/items"
+    },
+    "/restaurants/{restaurantId}/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Subcollection tracking WhatsApp menu checkout orders"
+    },
+    "/restaurants/{restaurantId}/views_log/{viewId}": {
+      "schema": "ViewLog",
+      "description": "Subcollection tracking individual customer menu view statistics"
+    },
+    "/restaurants/{restaurantId}/shifts/{shiftId}": {
+      "schema": "Shift",
+      "description": "Subcollection tracking historical shift reports and physical cashier box logs"
+    }
+  }
+}
