@@ -1,4 +1,4 @@
-import { Restaurant, Order, OrderItem, Category, Product } from '../types';
+import { Restaurant, Order, OrderItem, Category, Product } from './types';
 
 export interface PrintTemplateOptions {
   lang?: 'ar' | 'en';
